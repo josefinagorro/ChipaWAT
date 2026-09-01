@@ -1,13 +1,13 @@
 import { splitEvenly } from "./money";
 import type {
-  HouseMember,
+  GroupExpense,
   MemberBalance,
   MemberId,
   RentMonth,
   RentStatus,
   Settlement,
-  SharedExpense,
   Transfer,
+  User,
 } from "./types";
 
 export function getRentShareCents(rent: RentMonth): number {
@@ -60,7 +60,7 @@ export function buildRentTransfers(rents: RentMonth[]): Transfer[] {
   });
 }
 
-export function buildExpenseTransfers(expenses: SharedExpense[]): Transfer[] {
+export function buildExpenseTransfers(expenses: GroupExpense[]): Transfer[] {
   return expenses.flatMap((expense) => {
     const shares = splitEvenly(expense.amountCents, expense.participantIds.length);
 
@@ -100,7 +100,7 @@ export function mergeTransfers(transfers: Transfer[]): Transfer[] {
   );
 }
 
-export function calculateBalances(members: HouseMember[], transfers: Transfer[]): MemberBalance[] {
+export function calculateBalances(members: User[], transfers: Transfer[]): MemberBalance[] {
   const balances = new Map<MemberId, number>();
 
   members.forEach((member) => balances.set(member.id, 0));
@@ -158,9 +158,9 @@ export function simplifyTransfers(balances: MemberBalance[]): Transfer[] {
 }
 
 export function calculateSettlements(
-  members: HouseMember[],
+  members: User[],
   rents: RentMonth[],
-  expenses: SharedExpense[],
+  expenses: GroupExpense[],
   paidSettlementIds: string[],
 ): {
   directTransfers: Transfer[];

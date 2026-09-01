@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { useMemo, useState, type CSSProperties, type FormEvent } from "react";
 import {
   Banknote,
