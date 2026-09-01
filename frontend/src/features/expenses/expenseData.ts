@@ -22,6 +22,11 @@ export type Debt = {
   amount: number;
 };
 
+export type Balance = {
+  housemateId: string;
+  amount: number;
+};
+
 export const housemates: Housemate[] = [
   { id: "gorro", name: "Gorro" },
   { id: "tori", name: "Tori" },
@@ -122,4 +127,76 @@ export function calculateDebts(expenseList: Expense[]): Debt[] {
     });
 
   return Array.from(debts.values()).sort((first, second) => second.amount - first.amount);
+}
+export function calculateBalances(expenseList: Expense[]): Balance[] {
+  const balances = new Map<string, number>();
+
+  housemates.forEach((housemate) => {
+    balances.set(housemate.id, 0);
+  });
+
+  expenseList
+    .filter((expense) => expense.kind === "group")
+    .forEach((expense) => {
+      const splitAmount = expense.amount / expense.participants.length;
+      const paidByBalance = balances.get(expense.paidBy) ?? 0;
+
+      balances.set(expense.paidBy, paidByBalance + expense.amount);
+
+      expense.participants.forEach((participant) => {
+        const participantBalance = balances.get(participant) ?? 0;
+        balances.set(participant, participantBalance - splitAmount);
+      });
+    });
+
+  return Array.from(balances.entries()).map(([housemateId, amount]) => ({
+    housemateId,
+    amount,
+  }));
+}
+
+export function calculateOptimizedTransfers(expenseList: Expense[]): Debt[] {
+  const balances = calculateBalances(expenseList);
+  const debtors = balances
+    .filter((balance) => balance.amount < -0.01)
+    .map((balance) => ({
+      housemateId: balance.housemateId,
+      amount: Math.abs(balance.amount),
+    }))
+    .sort((first, second) => second.amount - first.amount);
+  const creditors = balances
+    .filter((balance) => balance.amount > 0.01)
+    .map((balance) => ({
+      housemateId: balance.housemateId,
+      amount: balance.amount,
+    }))
+    .sort((first, second) => second.amount - first.amount);
+  const transfers: Debt[] = [];
+  let debtorIndex = 0;
+  let creditorIndex = 0;
+
+  while (debtorIndex < debtors.length && creditorIndex < creditors.length) {
+    const debtor = debtors[debtorIndex];
+    const creditor = creditors[creditorIndex];
+    const amount = Math.min(debtor.amount, creditor.amount);
+
+    transfers.push({
+      from: debtor.housemateId,
+      to: creditor.housemateId,
+      amount,
+    });
+
+    debtor.amount -= amount;
+    creditor.amount -= amount;
+
+    if (debtor.amount < 0.01) {
+      debtorIndex += 1;
+    }
+
+    if (creditor.amount < 0.01) {
+      creditorIndex += 1;
+    }
+  }
+
+  return transfers;
 }

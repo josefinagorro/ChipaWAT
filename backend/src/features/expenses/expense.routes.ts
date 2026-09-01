@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { calculateDebts, createExpense, expenses, housemates } from "./expense.service.js";
+import { calculateBalances, calculateDebts, calculateOptimizedTransfers, createExpense, expenses, housemates } from "./expense.service.js";
 import type { Expense } from "./expense.types.js";
 
 export const expenseRouter = Router();
@@ -9,6 +9,8 @@ expenseRouter.get("/", (_request, response) => {
     housemates,
     expenses,
     debts: calculateDebts(expenses),
+    balances: calculateBalances(expenses),
+    optimizedTransfers: calculateOptimizedTransfers(expenses),
   });
 });
 
@@ -43,3 +45,4 @@ expenseRouter.post("/", (request, response) => {
 
   response.status(201).json(newExpense);
 });
+
