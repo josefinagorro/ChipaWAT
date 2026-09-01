@@ -1882,9 +1882,7 @@ select:focus {
   top: 0;
   min-height: 100vh;
   border-right-color: rgba(244, 174, 205, 0.5);
-  background:
-    linear-gradient(180deg, rgba(250, 214, 231, 0.96), rgba(255, 232, 242, 0.94)),
-    #f8d6e6;
+  background: rgba(255, 245, 250, 0.82);
   backdrop-filter: blur(18px);
   transition:
     padding 220ms ease,
