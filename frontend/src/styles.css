@@ -2882,3 +2882,83 @@ select:focus {
   }
 }
 
+/* ==========================================================================
+   Responsive final: se usa más desde el celular que desde la compu, así
+   que este bloque queda último a propósito (gana en la cascada sobre
+   cualquier declaración anterior) y corrige el sidebar para que en
+   pantallas chicas sea una barra compacta arriba, no una franja que ocupa
+   toda la pantalla.
+   ========================================================================== */
+@media (max-width: 900px) {
+  /* Bug principal: el sidebar quedaba con min-height: 100vh incluso en
+     mobile, así que tapaba toda la pantalla y no se veía el contenido. */
+  .sidebar {
+    min-height: auto;
+    height: auto;
+  }
+
+  .sidebar-toggle {
+    display: none;
+  }
+
+  .brand > div:not(.brand-mark) {
+    display: none;
+  }
+
+  .nav-bottom {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+    margin-top: 0;
+  }
+
+  /* El submenú de Gastos (Alquiler / Historial) rompía la fila de íconos:
+     en mobile no se ve expandido, se entra desde el ícono de Gastos. */
+  .nav-group summary::after,
+  .nav-subitems {
+    display: none;
+  }
+
+  .content {
+    width: 100%;
+    padding: 16px 14px 28px;
+  }
+
+  .topbar {
+    flex-wrap: wrap;
+  }
+
+  /* El botón de Salir/Admin flotaba arriba a la derecha, tapando la barra
+     de navegación del sidebar. En mobile baja al costado inferior, como
+     el botón "+" del calendario. */
+  .auth-floating {
+    top: auto;
+    bottom: 14px;
+    right: 14px;
+    z-index: 25;
+  }
+
+  .auth-logout {
+    gap: 0;
+    width: 44px;
+    min-height: 44px;
+    padding: 0;
+    justify-content: center;
+    font-size: 0;
+  }
+}
+
+@media (max-width: 480px) {
+  .module-header h1,
+  .account-header h1,
+  .groups-header h1,
+  .admin-header h1 {
+    font-size: clamp(24px, 7vw, 30px);
+  }
+
+  .account-header-actions,
+  .groups-header,
+  .admin-header {
+    width: 100%;
+  }
+}
+
