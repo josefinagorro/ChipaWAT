@@ -2514,8 +2514,8 @@ select:focus {
 
 .week-calendar-header {
   display: grid;
-  grid-template-columns: 74px repeat(7, minmax(110px, 1fr));
-  min-width: 844px;
+  grid-template-columns: 74px repeat(7, minmax(132px, 1fr));
+  min-width: 998px;
   position: sticky;
   top: 0;
   z-index: 3;
@@ -2559,8 +2559,8 @@ select:focus {
 
 .all-day-row {
   display: grid;
-  grid-template-columns: 74px repeat(7, minmax(110px, 1fr));
-  min-width: 844px;
+  grid-template-columns: 74px repeat(7, minmax(132px, 1fr));
+  min-width: 998px;
   min-height: 48px;
   border-top: 1px solid rgba(244, 174, 205, 0.42);
   border-bottom: 1px solid rgba(244, 174, 205, 0.42);
@@ -2605,8 +2605,8 @@ select:focus {
 
 .week-calendar-body {
   display: grid;
-  grid-template-columns: 74px minmax(770px, 1fr);
-  min-width: 844px;
+  grid-template-columns: 74px minmax(924px, 1fr);
+  min-width: 998px;
   max-height: 680px;
 }
 
@@ -2645,11 +2645,11 @@ select:focus {
   position: absolute;
   right: 6px;
   left: 6px;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 6px;
-  min-height: 38px;
-  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-height: 58px;
+  padding: 7px 9px;
   overflow: hidden;
   border: 1px solid rgba(255, 255, 255, 0.68);
   border-radius: 10px;
@@ -2670,48 +2670,56 @@ select:focus {
 }
 
 .calendar-event-block > button {
-  display: grid;
+  display: flex;
+  flex-direction: column;
   gap: 2px;
+  width: 100%;
   min-width: 0;
   padding: 0;
   border: 0;
-  color: #443240;
+  color: #3a2836;
   background: transparent;
   text-align: left;
 }
 
-.calendar-event-block strong,
+.calendar-event-block strong {
+  display: -webkit-box;
+  overflow: hidden;
+  font-size: 13px;
+  line-height: 1.25;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  white-space: normal;
+  word-break: break-word;
+}
+
 .calendar-event-block span {
   overflow: hidden;
+  color: #6c4a63;
+  font-size: 11px;
+  font-weight: 800;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.calendar-event-block strong {
-  font-size: 13px;
-}
-
-.calendar-event-block span {
-  color: #7d5470;
-  font-size: 11px;
-  font-weight: 800;
-}
-
 .calendar-event-block > div {
   display: flex;
-  align-items: start;
+  flex-shrink: 0;
+  align-items: center;
   gap: 4px;
+  margin-top: auto;
 }
 
 .calendar-event-block > div button {
   display: grid;
-  width: 22px;
-  height: 22px;
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
   place-items: center;
   border: 0;
   border-radius: 6px;
   color: #bd4778;
-  background: rgba(255, 255, 255, 0.62);
+  background: rgba(255, 255, 255, 0.8);
 }
 
 .calendar-fab {

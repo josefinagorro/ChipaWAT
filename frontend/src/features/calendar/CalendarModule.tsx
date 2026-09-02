@@ -1,4 +1,4 @@
-import { useMemo, useState, type CSSProperties, type FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useState, type CSSProperties, type FormEvent } from "react";
 import {
   CalendarDays,
   CheckCircle2,
@@ -17,6 +17,9 @@ import {
   UsersRound,
   X,
 } from "lucide-react";
+import { useAuth } from "../auth/AuthContext";
+import { listMyGroups } from "../groups/groupsApi";
+import type { MyGroup } from "../groups/types";
 import {
   addDays,
   canGroupUseMembers,
@@ -27,7 +30,21 @@ import {
   getPersonalTodaySummary,
   monthDays,
 } from "./calendarLogic";
-import { calendarEvents } from "./mockData";
+import {
+  createPersonalCalendarEvent,
+  deletePersonalCalendarEvent,
+  listPersonalCalendarEvents,
+  setPersonalCalendarEventStatus,
+  updatePersonalCalendarEvent,
+  type PersonalCalendarEventInput,
+} from "./personalCalendarApi";
+import {
+  deleteGroupCalendarEvent,
+  listGroupCalendarEvents,
+  saveGroupCalendarEvent,
+  setGroupCalendarEventStatus,
+  type GroupCalendarEventInput,
+} from "./groupCalendarApi";
 import type {
   CalendarDraft,
   CalendarEvent,
@@ -35,10 +52,8 @@ import type {
   CalendarEventStatus,
   CalendarEventKind,
   CalendarOccurrence,
-  GroupCalendarEvent,
   RecurrenceFrequency,
 } from "./types";
-import { currentUserId, groupMembers, groups, users } from "../expenses/mockData";
 import type { ExpenseContext, User, UserId } from "../expenses/types";
 
 type CalendarView = "month" | "week" | "day" | "list";
@@ -48,10 +63,17 @@ type ShellControls = {
   onSidebarToggle: () => void;
 };
 
-const defaultGroupId = "casa-tahoe";
-const today = "2026-01-12";
 const weekHours = Array.from({ length: 18 }, (_, index) => index + 6);
 const hourHeight = 68;
+
+const errorBoxStyle: CSSProperties = {
+  margin: 0,
+  padding: "10px 12px",
+  borderRadius: 10,
+  color: "#9a2b3f",
+  background: "#fde3e7",
+  fontSize: 13,
+};
 
 const statusLabels: Record<CalendarEventStatus, string> = {
   pending: "Pendiente",
@@ -74,18 +96,22 @@ const recurrenceLabels: Record<RecurrenceFrequency, string> = {
   monthly: "Mensualmente",
 };
 
+function todayIso(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
 function getGroupContext(groupId: string): ExpenseContext {
   return { scope: "group", groupId };
 }
 
-function blankDraft(context: ExpenseContext, memberIds: UserId[]): CalendarDraft {
+function blankDraft(context: ExpenseContext, memberIds: UserId[], currentUserId: UserId): CalendarDraft {
   return {
     scope: context.scope,
     kind: "responsibility",
     title: "",
     description: "",
     category: context.scope === "personal" ? "Recordatorio" : "Casa",
-    date: today,
+    date: todayIso(),
     startTime: "18:00",
     endTime: "19:00",
     allDay: false,
@@ -95,22 +121,6 @@ function blankDraft(context: ExpenseContext, memberIds: UserId[]): CalendarDraft
     responsibleIds: context.scope === "group" ? [memberIds[0] ?? currentUserId] : [currentUserId],
     participantIds: context.scope === "group" ? memberIds : [currentUserId],
   };
-}
-
-function userName(userId: UserId): string {
-  return users.find((user) => user.id === userId)?.name ?? userId;
-}
-
-function userById(userId: UserId): User {
-  return users.find((user) => user.id === userId) ?? users[0];
-}
-
-function originLabel(event: CalendarEvent): string {
-  if (event.scope !== "group") {
-    return "";
-  }
-
-  return groups.find((group) => group.id === event.groupId)?.name ?? "";
 }
 
 function formatDate(value: string): string {
@@ -130,8 +140,12 @@ function formatLongDate(value: string): string {
   }).format(new Date(value));
 }
 
-function Avatar({ userId, small = false }: { userId: UserId; small?: boolean }) {
-  const user = userById(userId);
+function directoryUser(directory: User[], userId: UserId): User {
+  return directory.find((user) => user.id === userId) ?? { id: userId, name: "Alguien", color: "#d36a97" };
+}
+
+function Avatar({ userId, directory, small = false }: { userId: UserId; directory: User[]; small?: boolean }) {
+  const user = directoryUser(directory, userId);
 
   return (
     <span
@@ -145,32 +159,144 @@ function Avatar({ userId, small = false }: { userId: UserId; small?: boolean }) 
 }
 
 export function CalendarModule({ sidebarCollapsed, onSidebarToggle }: ShellControls) {
-  const [context, setContext] = useState<ExpenseContext>(getGroupContext(defaultGroupId));
-  const [events, setEvents] = useState<CalendarEvent[]>(calendarEvents);
+  const { profile, user } = useAuth();
+  const currentUserId = user?.id ?? "";
+
+  const [context, setContext] = useState<ExpenseContext>({ scope: "personal", ownerUserId: "" });
   const [view, setView] = useState<CalendarView>("week");
-  const [selectedDate, setSelectedDate] = useState(today);
+  const [selectedDate, setSelectedDate] = useState(todayIso());
   const [showModal, setShowModal] = useState(false);
   const [editingEventId, setEditingEventId] = useState<string | null>(null);
 
-  const activeGroup = context.scope === "group" ? groups.find((group) => group.id === context.groupId) : undefined;
-  const activeGroupMembers = useMemo(() => {
-    if (context.scope !== "group") {
-      return [];
+  // Nada de esto sale de un archivo mock: grupos, integrantes y acontecimientos
+  // vienen de Supabase, y las policies se encargan de que cada una vea lo suyo.
+  const [personalEvents, setPersonalEvents] = useState<CalendarEvent[]>([]);
+  const [personalLoading, setPersonalLoading] = useState(true);
+  const [personalError, setPersonalError] = useState<string | null>(null);
+
+  const reloadPersonalEvents = useCallback(async () => {
+    setPersonalError(null);
+
+    try {
+      setPersonalEvents(await listPersonalCalendarEvents());
+    } catch (caughtError) {
+      setPersonalError(
+        caughtError instanceof Error ? caughtError.message : "No pudimos cargar tu calendario personal.",
+      );
+    } finally {
+      setPersonalLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void reloadPersonalEvents();
+  }, [reloadPersonalEvents]);
+
+  const [myGroups, setMyGroups] = useState<MyGroup[]>([]);
+  const [groupsLoaded, setGroupsLoaded] = useState(false);
+  const [groupsError, setGroupsError] = useState<string | null>(null);
+
+  const reloadGroups = useCallback(async () => {
+    if (!currentUserId) {
+      return;
     }
 
-    const memberIds = groupMembers
-      .filter((membership) => membership.groupId === context.groupId)
-      .map((membership) => membership.userId);
+    try {
+      const nextGroups = await listMyGroups(currentUserId);
+      setMyGroups(nextGroups);
 
-    return users.filter((user) => memberIds.includes(user.id));
-  }, [context]);
-  const activeMemberIds = activeGroupMembers.map((member) => member.id);
-  const [draft, setDraft] = useState(() => blankDraft(context, activeMemberIds));
+      // Si el grupo que estabas mirando ya no existe (o recien entras), cae al primero.
+      setContext((current) =>
+        current.scope === "group" && !nextGroups.some((group) => group.id === current.groupId)
+          ? getGroupContext(nextGroups[0]?.id ?? "")
+          : current,
+      );
+    } catch (caughtError) {
+      setGroupsError(caughtError instanceof Error ? caughtError.message : "No pudimos cargar tus grupos.");
+    } finally {
+      setGroupsLoaded(true);
+    }
+  }, [currentUserId]);
 
-  const contextEvents = useMemo(
-    () => getContextEvents(events, context, currentUserId),
-    [context, events],
+  useEffect(() => {
+    void reloadGroups();
+  }, [reloadGroups]);
+
+  // Se pide el calendario de TODOS los grupos donde participas de una, no
+  // solo del grupo activo: asi "Mi calendario" puede mezclar planes y
+  // responsabilidades de cualquier grupo, como hacia el mock.
+  const groupIdsKey = useMemo(() => myGroups.map((group) => group.id).sort().join(","), [myGroups]);
+
+  const [groupEvents, setGroupEvents] = useState<CalendarEvent[]>([]);
+  const [groupEventsLoading, setGroupEventsLoading] = useState(true);
+  const [groupEventsError, setGroupEventsError] = useState<string | null>(null);
+
+  const reloadGroupEvents = useCallback(async () => {
+    const groupIds = groupIdsKey ? groupIdsKey.split(",") : [];
+
+    if (groupIds.length === 0) {
+      setGroupEvents([]);
+      setGroupEventsLoading(false);
+      return;
+    }
+
+    setGroupEventsError(null);
+
+    try {
+      setGroupEvents(await listGroupCalendarEvents(groupIds));
+    } catch (caughtError) {
+      setGroupEventsError(
+        caughtError instanceof Error ? caughtError.message : "No pudimos cargar el calendario del grupo.",
+      );
+    } finally {
+      setGroupEventsLoading(false);
+    }
+  }, [groupIdsKey]);
+
+  useEffect(() => {
+    void reloadGroupEvents();
+  }, [reloadGroupEvents]);
+
+  const activeGroup = context.scope === "group" ? myGroups.find((group) => group.id === context.groupId) : undefined;
+  const activeGroupMembers = useMemo<User[]>(
+    () => (activeGroup?.members ?? []).map((member) => ({ id: member.userId, name: member.name, color: member.color })),
+    [activeGroup],
   );
+  const activeMemberIds = activeGroupMembers.map((member) => member.id);
+
+  // Todas las personas que pueden aparecer en pantalla (de cualquier grupo),
+  // para resolver nombres y colores sin pasar la lista por props.
+  const directory = useMemo<User[]>(() => {
+    const known = new Map<string, User>();
+
+    myGroups.forEach((group) =>
+      group.members.forEach((member) => {
+        if (!known.has(member.userId)) {
+          known.set(member.userId, { id: member.userId, name: member.name, color: member.color });
+        }
+      }),
+    );
+
+    if (profile && !known.has(profile.id)) {
+      known.set(profile.id, { id: profile.id, name: profile.name, color: profile.color });
+    }
+
+    return Array.from(known.values());
+  }, [myGroups, profile]);
+
+  const groupNames = useMemo(
+    () => Object.fromEntries(myGroups.map((group) => [group.id, group.name])),
+    [myGroups],
+  );
+
+  const [draft, setDraft] = useState(() => blankDraft(context, activeMemberIds, currentUserId));
+
+  const combinedEvents = useMemo(() => [...personalEvents, ...groupEvents], [personalEvents, groupEvents]);
+  const contextEvents = useMemo(
+    () => getContextEvents(combinedEvents, context, currentUserId),
+    [combinedEvents, context, currentUserId],
+  );
+  const today = todayIso();
   const rangeStart = view === "month" ? `${selectedDate.slice(0, 7)}-01` : selectedDate;
   const rangeEnd =
     view === "month"
@@ -185,9 +311,9 @@ export function CalendarModule({ sidebarCollapsed, onSidebarToggle }: ShellContr
     [contextEvents, rangeEnd, rangeStart],
   );
   const selectedDayOccurrences = occurrences.filter((occurrence) => occurrence.date === selectedDate);
-  const personalToday = getPersonalTodaySummary(events, currentUserId, today);
+  const personalToday = getPersonalTodaySummary(combinedEvents, currentUserId, today);
   const groupUpcoming =
-    context.scope === "group" ? getGroupUpcomingSummary(events, context.groupId, today, 7) : [];
+    context.scope === "group" ? getGroupUpcomingSummary(combinedEvents, context.groupId, today, 7) : [];
   const groupToday = groupUpcoming.filter((occurrence) => occurrence.date === today);
   const activeToday = context.scope === "personal" ? personalToday : groupToday;
   const activeUpcoming = context.scope === "personal" ? personalToday : groupUpcoming;
@@ -196,19 +322,17 @@ export function CalendarModule({ sidebarCollapsed, onSidebarToggle }: ShellContr
   const switchContext = (nextContext: ExpenseContext) => {
     const memberIds =
       nextContext.scope === "group"
-        ? groupMembers
-            .filter((membership) => membership.groupId === nextContext.groupId)
-            .map((membership) => membership.userId)
+        ? (myGroups.find((group) => group.id === nextContext.groupId)?.members ?? []).map((member) => member.userId)
         : [currentUserId];
 
     setContext(nextContext);
-    setDraft(blankDraft(nextContext, memberIds));
+    setDraft(blankDraft(nextContext, memberIds, currentUserId));
     setEditingEventId(null);
   };
 
   const openNewActivity = () => {
     setEditingEventId(null);
-    setDraft(blankDraft(context, context.scope === "group" ? activeMemberIds : [currentUserId]));
+    setDraft(blankDraft(context, context.scope === "group" ? activeMemberIds : [currentUserId], currentUserId));
     setShowModal(true);
   };
 
@@ -233,80 +357,173 @@ export function CalendarModule({ sidebarCollapsed, onSidebarToggle }: ShellContr
     setShowModal(true);
   };
 
-  const saveDraft = (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
+  const saveDraft = (formEvent: FormEvent<HTMLFormElement>) => {
+    formEvent.preventDefault();
 
     if (!draft.title.trim()) {
       return;
     }
 
-    if (context.scope === "group" && !canGroupUseMembers(activeGroupMembers, [...draft.responsibleIds, ...draft.participantIds])) {
+    if (context.scope === "personal") {
+      const input: PersonalCalendarEventInput = {
+        title: draft.title.trim(),
+        description: draft.description.trim(),
+        category: draft.category.trim() || "Otro",
+        date: draft.date,
+        startTime: draft.allDay ? null : draft.startTime,
+        endTime: draft.allDay ? null : draft.endTime,
+        allDay: draft.allDay,
+        recurrenceFrequency: draft.recurrenceFrequency,
+        priority: draft.priority,
+        notes: draft.notes.trim(),
+      };
+      const idToEdit = editingEventId;
+
+      void (async () => {
+        setPersonalError(null);
+
+        try {
+          if (idToEdit) {
+            await updatePersonalCalendarEvent(idToEdit, input);
+          } else {
+            await createPersonalCalendarEvent(input);
+          }
+
+          await reloadPersonalEvents();
+          setShowModal(false);
+          setEditingEventId(null);
+        } catch (caughtError) {
+          // El modal queda abierto para no perder lo que escribio.
+          setPersonalError(
+            caughtError instanceof Error ? caughtError.message : "No pudimos guardar el acontecimiento.",
+          );
+        }
+      })();
+
       return;
     }
 
-    const base = {
-      id: editingEventId ?? `activity-${Date.now()}`,
+    if (!canGroupUseMembers(activeGroupMembers, [...draft.responsibleIds, ...draft.participantIds])) {
+      return;
+    }
+
+    if (draft.responsibleIds.length === 0 || draft.participantIds.length === 0) {
+      return;
+    }
+
+    const groupId = context.groupId;
+    const input: GroupCalendarEventInput = {
+      id: editingEventId,
+      kind: draft.kind,
       title: draft.title.trim(),
-      description: draft.description.trim() || undefined,
+      description: draft.description.trim(),
       category: draft.category.trim() || "Otro",
       date: draft.date,
-      startTime: draft.allDay ? undefined : draft.startTime,
-      endTime: draft.allDay ? undefined : draft.endTime,
+      startTime: draft.allDay ? null : draft.startTime,
+      endTime: draft.allDay ? null : draft.endTime,
       allDay: draft.allDay,
-      recurrence: {
-        frequency: draft.recurrenceFrequency,
-        interval: 1,
-        rotationUserIds:
-          context.scope === "group" && draft.recurrenceFrequency !== "none" && draft.kind === "responsibility"
-            ? draft.responsibleIds
-            : undefined,
-      },
+      recurrenceFrequency: draft.recurrenceFrequency,
       priority: draft.priority,
-      status: "pending" as const,
-      notes: draft.notes.trim() || undefined,
+      notes: draft.notes.trim(),
+      responsibleIds: draft.responsibleIds,
+      participantIds: draft.participantIds,
+      rotationUserIds:
+        draft.recurrenceFrequency !== "none" && draft.kind === "responsibility" ? draft.responsibleIds : null,
     };
 
-    const nextEvent: CalendarEvent =
-      context.scope === "personal"
-        ? {
-            ...base,
-            scope: "personal",
-            ownerUserId: currentUserId,
-            privacy: "private",
-          }
-        : {
-            ...base,
-            scope: "group",
-            groupId: context.groupId,
-            kind: draft.kind,
-            responsibleIds: draft.responsibleIds,
-            participantIds: draft.participantIds,
-          };
+    void (async () => {
+      setGroupEventsError(null);
 
-    setEvents((current) =>
-      editingEventId
-        ? current.map((calendarEvent) => (calendarEvent.id === editingEventId ? nextEvent : calendarEvent))
-        : [nextEvent, ...current],
-    );
-    setShowModal(false);
-    setEditingEventId(null);
+      try {
+        await saveGroupCalendarEvent(groupId, input);
+        await reloadGroupEvents();
+        setShowModal(false);
+        setEditingEventId(null);
+      } catch (caughtError) {
+        // El modal queda abierto para no perder lo que escribio.
+        setGroupEventsError(
+          caughtError instanceof Error ? caughtError.message : "No pudimos guardar el acontecimiento.",
+        );
+      }
+    })();
   };
 
   const deleteActivity = (eventId: string) => {
-    setEvents((current) => current.filter((event) => event.id !== eventId));
+    const target = combinedEvents.find((event) => event.id === eventId);
+
+    if (!target) {
+      return;
+    }
+
+    if (target.scope === "personal") {
+      void (async () => {
+        setPersonalError(null);
+
+        try {
+          await deletePersonalCalendarEvent(eventId);
+          await reloadPersonalEvents();
+        } catch (caughtError) {
+          setPersonalError(
+            caughtError instanceof Error ? caughtError.message : "No pudimos borrar el acontecimiento.",
+          );
+        }
+      })();
+
+      return;
+    }
+
+    void (async () => {
+      setGroupEventsError(null);
+
+      try {
+        await deleteGroupCalendarEvent(eventId);
+        await reloadGroupEvents();
+      } catch (caughtError) {
+        setGroupEventsError(
+          caughtError instanceof Error ? caughtError.message : "No pudimos borrar el acontecimiento.",
+        );
+      }
+    })();
   };
 
   const markCompleted = (eventId: string) => {
-    setEvents((current) =>
-      current.map((event) =>
-        event.id === eventId
-          ? {
-              ...event,
-              status: event.status === "completed" ? "pending" : "completed",
-            }
-          : event,
-      ),
-    );
+    const target = combinedEvents.find((event) => event.id === eventId);
+
+    if (!target) {
+      return;
+    }
+
+    const nextStatus: CalendarEventStatus = target.status === "completed" ? "pending" : "completed";
+
+    if (target.scope === "personal") {
+      void (async () => {
+        setPersonalError(null);
+
+        try {
+          await setPersonalCalendarEventStatus(eventId, nextStatus);
+          await reloadPersonalEvents();
+        } catch (caughtError) {
+          setPersonalError(
+            caughtError instanceof Error ? caughtError.message : "No pudimos actualizar el estado.",
+          );
+        }
+      })();
+
+      return;
+    }
+
+    void (async () => {
+      setGroupEventsError(null);
+
+      try {
+        await setGroupCalendarEventStatus(eventId, nextStatus);
+        await reloadGroupEvents();
+      } catch (caughtError) {
+        setGroupEventsError(
+          caughtError instanceof Error ? caughtError.message : "No pudimos actualizar el estado.",
+        );
+      }
+    })();
   };
 
   const toggleMember = (field: "responsibleIds" | "participantIds", userId: UserId) => {
@@ -318,6 +535,9 @@ export function CalendarModule({ sidebarCollapsed, onSidebarToggle }: ShellContr
     }));
   };
 
+  const modalError = context.scope === "personal" ? personalError : groupEventsError;
+  const bannerError = context.scope === "personal" ? personalError : groupsError ?? groupEventsError;
+
   return (
     <main className={`app-shell calendar-shell ${sidebarCollapsed ? "sidebar-collapsed" : ""}`}>
       <aside className="sidebar">
@@ -327,7 +547,7 @@ export function CalendarModule({ sidebarCollapsed, onSidebarToggle }: ShellContr
           </div>
           <div>
             <strong>ChipaWAT</strong>
-            <span>{context.scope === "personal" ? "Mi espacio" : activeGroup?.name}</span>
+            <span>{context.scope === "personal" ? "Mi espacio" : activeGroup?.name ?? "Sin grupo"}</span>
           </div>
         </div>
         <button
@@ -370,7 +590,7 @@ export function CalendarModule({ sidebarCollapsed, onSidebarToggle }: ShellContr
         <header className="module-header">
           <div>
             <span className="eyebrow">
-              {context.scope === "personal" ? "Mi calendario" : activeGroup?.name}
+              {context.scope === "personal" ? "Mi calendario" : activeGroup?.name ?? "Grupo activo"}
             </span>
             <h1>{context.scope === "personal" ? "Calendario personal" : "Calendario grupal"}</h1>
             <p>
@@ -385,7 +605,7 @@ export function CalendarModule({ sidebarCollapsed, onSidebarToggle }: ShellContr
           </button>
         </header>
 
-        <section className="calendar-context-tabs" aria-label="Calendarios">
+        <section className="calendar-context-tabs expense-context-tabs" aria-label="Calendarios">
           <button
             className={context.scope === "personal" ? "active" : ""}
             type="button"
@@ -395,20 +615,36 @@ export function CalendarModule({ sidebarCollapsed, onSidebarToggle }: ShellContr
             Personal
           </button>
           <button
-            className={context.scope === "group" && context.groupId === defaultGroupId ? "active" : ""}
+            className={context.scope === "group" ? "active" : ""}
             type="button"
-            onClick={() => switchContext(getGroupContext(defaultGroupId))}
+            onClick={() => switchContext(getGroupContext(activeGroup?.id ?? myGroups[0]?.id ?? ""))}
           >
             <UsersRound size={18} />
-            Casa Tahoe
+            Grupo
           </button>
+          <label className="group-select">
+            Grupo activo
+            <select
+              disabled={context.scope !== "group" || myGroups.length === 0}
+              value={context.scope === "group" ? context.groupId : activeGroup?.id ?? myGroups[0]?.id ?? ""}
+              onChange={(event) => switchContext(getGroupContext(event.target.value))}
+            >
+              {myGroups.map((group) => (
+                <option key={group.id} value={group.id}>
+                  {group.name}
+                </option>
+              ))}
+            </select>
+          </label>
         </section>
+
+        {bannerError ? <p style={errorBoxStyle}>{bannerError}</p> : null}
 
         <section className="summary-grid" aria-label="Resumen de calendario">
           <SummaryCard
             label="Hoy"
             value={String(activeToday.length)}
-            detail={context.scope === "personal" ? "en tu calendario" : `en ${activeGroup?.name}`}
+            detail={context.scope === "personal" ? "en tu calendario" : `en ${activeGroup?.name ?? "el grupo"}`}
             icon={<Clock3 size={20} />}
           />
           <SummaryCard
@@ -419,7 +655,11 @@ export function CalendarModule({ sidebarCollapsed, onSidebarToggle }: ShellContr
           />
           <SummaryCard
             label={context.scope === "group" ? "Próximas del grupo" : "Privadas"}
-            value={String(context.scope === "group" ? groupUpcoming.length : contextEvents.filter((event) => event.scope === "personal").length)}
+            value={String(
+              context.scope === "group"
+                ? groupUpcoming.length
+                : contextEvents.filter((event) => event.scope === "personal").length,
+            )}
             icon={<CalendarDays size={20} />}
           />
           <SummaryCard label="Vista actual" value={view} detail={formatLongDate(selectedDate)} icon={<Search size={20} />} />
@@ -428,14 +668,16 @@ export function CalendarModule({ sidebarCollapsed, onSidebarToggle }: ShellContr
         <section className="panel calendar-dashboard calendar-dashboard-single">
           <PanelTitle
             icon={context.scope === "personal" ? <UserRound size={18} /> : <UsersRound size={18} />}
-            title={context.scope === "personal" ? "Mi día" : `Hoy en ${activeGroup?.name}`}
+            title={context.scope === "personal" ? "Mi día" : `Hoy en ${activeGroup?.name ?? "el grupo"}`}
           />
           <OccurrenceList
+            directory={directory}
             emptyText={
               context.scope === "personal"
                 ? "No tenés actividades pendientes en tu calendario personal."
                 : "No hay acontecimientos del grupo para hoy."
             }
+            groupNames={groupNames}
             occurrences={context.scope === "personal" ? activeUpcoming : activeToday}
             onComplete={markCompleted}
             onDelete={deleteActivity}
@@ -467,20 +709,34 @@ export function CalendarModule({ sidebarCollapsed, onSidebarToggle }: ShellContr
             </label>
           </div>
 
-          {view === "month" ? (
+          {context.scope === "group" && !groupsLoaded ? (
+            <p>Cargando tus grupos...</p>
+          ) : context.scope === "group" && myGroups.length === 0 ? (
+            <p>
+              Todavia no sos parte de ningun grupo. Crea uno desde Grupos, en el menu de la izquierda, o pedile el
+              link de invitacion a una amiga.
+            </p>
+          ) : (context.scope === "group" && groupEventsLoading) || (context.scope === "personal" && personalLoading) ? (
+            <p>Cargando tu calendario...</p>
+          ) : view === "month" ? (
             <MonthView monthKey={selectedDate.slice(0, 7)} occurrences={occurrences} onSelectDate={setSelectedDate} />
           ) : view === "week" ? (
             <WeekScheduleView
+              directory={directory}
+              groupNames={groupNames}
               occurrences={occurrences}
               onComplete={markCompleted}
               onDelete={deleteActivity}
               onEdit={openEditActivity}
               onSelectDate={setSelectedDate}
               startDate={selectedDate}
+              today={today}
             />
           ) : view === "day" ? (
             <OccurrenceList
+              directory={directory}
               emptyText="No hay actividades para este dia."
+              groupNames={groupNames}
               occurrences={selectedDayOccurrences}
               onComplete={markCompleted}
               onDelete={deleteActivity}
@@ -488,7 +744,9 @@ export function CalendarModule({ sidebarCollapsed, onSidebarToggle }: ShellContr
             />
           ) : (
             <OccurrenceList
+              directory={directory}
               emptyText="No hay actividades en el rango elegido."
+              groupNames={groupNames}
               occurrences={occurrences}
               onComplete={markCompleted}
               onDelete={deleteActivity}
@@ -503,6 +761,7 @@ export function CalendarModule({ sidebarCollapsed, onSidebarToggle }: ShellContr
           context={context}
           draft={draft}
           editingEventId={editingEventId}
+          error={modalError}
           members={activeGroupMembers}
           onClose={() => setShowModal(false)}
           onSave={saveDraft}
@@ -583,37 +842,22 @@ function MonthView({
   );
 }
 
-function WeekView({
-  startDate,
-  occurrences,
-  onSelectDate,
-}: {
-  startDate: string;
-  occurrences: CalendarOccurrence[];
-  onSelectDate: (date: string) => void;
-}) {
-  return (
-    <div className="week-grid">
-      {Array.from({ length: 7 }, (_, index) => addDays(startDate, index)).map((date) => (
-        <button className="week-day" key={date} type="button" onClick={() => onSelectDate(date)}>
-          <strong>{formatDate(date)}</strong>
-          <span>{occurrences.filter((occurrence) => occurrence.date === date).length} actividades</span>
-        </button>
-      ))}
-    </div>
-  );
-}
-
 function WeekScheduleView({
   startDate,
+  today,
   occurrences,
+  directory,
+  groupNames,
   onSelectDate,
   onComplete,
   onDelete,
   onEdit,
 }: {
   startDate: string;
+  today: string;
   occurrences: CalendarOccurrence[];
+  directory: User[];
+  groupNames: Record<string, string>;
   onSelectDate: (date: string) => void;
   onComplete: (eventId: string) => void;
   onDelete: (eventId: string) => void;
@@ -650,6 +894,7 @@ function WeekScheduleView({
                   key={occurrence.id}
                   type="button"
                   onClick={() => onEdit(occurrence.event)}
+                  title={occurrence.event.title}
                 >
                   {occurrence.event.title}
                 </button>
@@ -678,6 +923,8 @@ function WeekScheduleView({
                 {timedOccurrences.map((occurrence) => (
                   <CalendarBlock
                     key={occurrence.id}
+                    directory={directory}
+                    groupNames={groupNames}
                     occurrence={occurrence}
                     onComplete={() => onComplete(occurrence.sourceEventId)}
                     onDelete={() => onDelete(occurrence.sourceEventId)}
@@ -695,33 +942,36 @@ function WeekScheduleView({
 
 function CalendarBlock({
   occurrence,
+  directory,
+  groupNames,
   onComplete,
   onDelete,
   onEdit,
 }: {
   occurrence: CalendarOccurrence;
+  directory: User[];
+  groupNames: Record<string, string>;
   onComplete: () => void;
   onDelete: () => void;
   onEdit: () => void;
 }) {
   const top = getEventTop(occurrence.event.startTime);
   const height = getEventHeight(occurrence.event.startTime, occurrence.event.endTime);
+  const origin = occurrence.event.scope === "group" ? groupNames[occurrence.event.groupId] ?? "" : "";
+  const timeLabel = `${occurrence.event.startTime} - ${occurrence.event.endTime}${origin ? ` · ${origin}` : ""}`;
 
   return (
     <article
       className={`calendar-event-block ${occurrence.event.scope} ${occurrence.event.priority}`}
       style={{ top, height } as CSSProperties}
     >
-      <button type="button" onClick={onEdit}>
+      <button type="button" onClick={onEdit} title={`${occurrence.event.title} · ${timeLabel}`}>
         <strong>{occurrence.event.title}</strong>
-        <span>
-          {occurrence.event.startTime} - {occurrence.event.endTime}
-          {originLabel(occurrence.event) ? ` · ${originLabel(occurrence.event)}` : ""}
-        </span>
+        <span>{timeLabel}</span>
       </button>
       <div>
         {occurrence.responsibleIds.slice(0, 2).map((userId) => (
-          <Avatar key={userId} userId={userId} small />
+          <Avatar key={userId} directory={directory} userId={userId} small />
         ))}
         <button type="button" onClick={onComplete} aria-label="Completar acontecimiento">
           <CheckCircle2 size={14} />
@@ -742,7 +992,7 @@ function getEventTop(startTime?: string): number {
 function getEventHeight(startTime?: string, endTime?: string): number {
   const startMinutes = minutesFromTime(startTime ?? "06:00");
   const endMinutes = minutesFromTime(endTime ?? startTime ?? "07:00");
-  return Math.max(38, ((endMinutes - startMinutes) / 60) * hourHeight);
+  return Math.max(56, ((endMinutes - startMinutes) / 60) * hourHeight);
 }
 
 function minutesFromTime(time: string): number {
@@ -760,13 +1010,17 @@ function weekdayName(date: string): string {
 }
 
 function OccurrenceList({
+  directory,
   emptyText,
+  groupNames,
   occurrences,
   onComplete,
   onDelete,
   onEdit,
 }: {
+  directory: User[];
   emptyText: string;
+  groupNames: Record<string, string>;
   occurrences: CalendarOccurrence[];
   onComplete: (eventId: string) => void;
   onDelete: (eventId: string) => void;
@@ -784,46 +1038,69 @@ function OccurrenceList({
 
   return (
     <div className="activity-list">
-      {occurrences.map((occurrence) => (
-        <article className={`activity-card ${occurrence.event.status}`} key={occurrence.id}>
-          <div>
-            <div className="activity-title">
-              <span className={`category-pill ${occurrence.event.scope}`}>{occurrence.event.category}</span>
-              {occurrence.event.scope === "group" ? (
-                <span className={`kind-badge ${occurrence.event.kind}`}>{occurrence.event.kind === "plan" ? "Plan" : "Responsabilidad"}</span>
-              ) : null}
-              <span className={`priority-badge ${occurrence.event.priority}`}>{priorityLabels[occurrence.event.priority]}</span>
-            </div>
-            <h3>{occurrence.event.title}</h3>
-            <small>
-              {formatDate(occurrence.date)} ·{" "}
-              {occurrence.event.allDay
-                ? "Durante el dia"
-                : `${occurrence.event.startTime} a ${occurrence.event.endTime}`}
-              {originLabel(occurrence.event) ? ` · ${originLabel(occurrence.event)}` : ""}
-            </small>
-          </div>
-          <div className="activity-people">
-            {occurrence.responsibleIds.map((userId) => (
-              <Avatar key={userId} userId={userId} small />
-            ))}
-          </div>
-          <div className="card-footer">
-            <span>{statusLabels[occurrence.event.status]}</span>
+      {occurrences.map((occurrence) => {
+        const origin = occurrence.event.scope === "group" ? groupNames[occurrence.event.groupId] ?? "" : "";
+
+        return (
+          <article className={`activity-card ${occurrence.event.status}`} key={occurrence.id}>
             <div>
-              <button className="icon-button muted" type="button" onClick={() => onComplete(occurrence.sourceEventId)} aria-label="Completar actividad">
-                <CheckCircle2 size={16} />
-              </button>
-              <button className="icon-button muted" type="button" onClick={() => onEdit(occurrence.event)} aria-label="Editar actividad">
-                <Edit3 size={16} />
-              </button>
-              <button className="icon-button muted danger" type="button" onClick={() => onDelete(occurrence.sourceEventId)} aria-label="Eliminar actividad">
-                <Trash2 size={16} />
-              </button>
+              <div className="activity-title">
+                <span className={`category-pill ${occurrence.event.scope}`}>{occurrence.event.category}</span>
+                {occurrence.event.scope === "group" ? (
+                  <span className={`kind-badge ${occurrence.event.kind}`}>
+                    {occurrence.event.kind === "plan" ? "Plan" : "Responsabilidad"}
+                  </span>
+                ) : null}
+                <span className={`priority-badge ${occurrence.event.priority}`}>
+                  {priorityLabels[occurrence.event.priority]}
+                </span>
+              </div>
+              <h3>{occurrence.event.title}</h3>
+              <small>
+                {formatDate(occurrence.date)} ·{" "}
+                {occurrence.event.allDay
+                  ? "Durante el dia"
+                  : `${occurrence.event.startTime} a ${occurrence.event.endTime}`}
+                {origin ? ` · ${origin}` : ""}
+              </small>
             </div>
-          </div>
-        </article>
-      ))}
+            <div className="activity-people">
+              {occurrence.responsibleIds.map((userId) => (
+                <Avatar key={userId} directory={directory} userId={userId} small />
+              ))}
+            </div>
+            <div className="card-footer">
+              <span>{statusLabels[occurrence.event.status]}</span>
+              <div>
+                <button
+                  className="icon-button muted"
+                  type="button"
+                  onClick={() => onComplete(occurrence.sourceEventId)}
+                  aria-label="Completar actividad"
+                >
+                  <CheckCircle2 size={16} />
+                </button>
+                <button
+                  className="icon-button muted"
+                  type="button"
+                  onClick={() => onEdit(occurrence.event)}
+                  aria-label="Editar actividad"
+                >
+                  <Edit3 size={16} />
+                </button>
+                <button
+                  className="icon-button muted danger"
+                  type="button"
+                  onClick={() => onDelete(occurrence.sourceEventId)}
+                  aria-label="Eliminar actividad"
+                >
+                  <Trash2 size={16} />
+                </button>
+              </div>
+            </div>
+          </article>
+        );
+      })}
     </div>
   );
 }
@@ -832,6 +1109,7 @@ function ActivityModal({
   context,
   draft,
   editingEventId,
+  error,
   members,
   onClose,
   onSave,
@@ -842,6 +1120,7 @@ function ActivityModal({
   context: ExpenseContext;
   draft: CalendarDraft;
   editingEventId: string | null;
+  error: string | null;
   members: User[];
   onClose: () => void;
   onSave: (event: FormEvent<HTMLFormElement>) => void;
@@ -869,7 +1148,7 @@ function ActivityModal({
                 className={draft.kind === kind ? "active" : ""}
                 key={kind}
                 type="button"
-              onClick={() => onUpdate((current) => ({ ...current, kind }))}
+                onClick={() => onUpdate((current) => ({ ...current, kind }))}
               >
                 {kind === "plan" ? "Plan / acontecimiento" : "Responsabilidad"}
               </button>
@@ -1023,6 +1302,8 @@ function ActivityModal({
           </p>
         </div>
 
+        {error ? <p style={errorBoxStyle}>{error}</p> : null}
+
         <button className="primary-button" type="submit">
           Guardar
         </button>
@@ -1060,7 +1341,7 @@ function MemberPicker({
             type="button"
             onClick={() => onToggle(member.id)}
           >
-            <Avatar userId={member.id} small />
+            <Avatar directory={members} userId={member.id} small />
             {member.name}
           </button>
         ))}
