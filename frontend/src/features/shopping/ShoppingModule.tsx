@@ -144,6 +144,17 @@ export function ShoppingModule({ sidebarCollapsed, onSidebarToggle }: ShellContr
             Super
           </a>
         </nav>
+
+        <div className="nav-bottom">
+          <a className="nav-item" href="#grupos">
+            <UsersRound size={18} />
+            Grupos
+          </a>
+          <a className="nav-item" href="#cuenta">
+            <UserRound size={18} />
+            Cuenta
+          </a>
+        </div>
       </aside>
 
       <section className="content" id="super">

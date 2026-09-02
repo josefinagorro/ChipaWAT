@@ -2,6 +2,7 @@ import cors from "cors";
 import express from "express";
 import { expenseRouter } from "./features/expenses/expense.routes.js";
 import { healthRouter } from "./routes/health.routes.js";
+import { meRouter } from "./routes/me.routes.js";
 
 export const app = express();
 
@@ -14,3 +15,4 @@ app.use(express.json());
 
 app.use("/api/expenses", expenseRouter);
 app.use("/api/health", healthRouter);
+app.use("/api/me", meRouter);

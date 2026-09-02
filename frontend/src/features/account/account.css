@@ -1,0 +1,198 @@
+/* Grupos + Cuenta van juntos al fondo del sidebar: margin-top auto los
+   empuja abajo porque .sidebar es un flex en columna. */
+.nav-bottom {
+  display: grid;
+  gap: 8px;
+  margin-top: auto;
+}
+
+.account-shell {
+  min-height: 100vh;
+  padding: 32px 24px 64px;
+  background:
+    radial-gradient(circle at top left, rgba(255, 192, 203, 0.34), transparent 28rem),
+    linear-gradient(135deg, #fff8fb 0%, #f2fff7 100%);
+}
+
+.account-content {
+  display: grid;
+  gap: 18px;
+  width: min(720px, 100%);
+  margin: 0 auto;
+}
+
+.account-header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.account-header h1 {
+  margin: 4px 0 2px;
+  font-size: clamp(26px, 4vw, 36px);
+  line-height: 1.05;
+  color: #3d3341;
+}
+
+.account-eyebrow {
+  color: #8a315f;
+  font-size: 13px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.account-header-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.account-panel {
+  display: grid;
+  gap: 12px;
+  padding: 22px;
+  border: 1px solid rgba(216, 156, 182, 0.26);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.8);
+  box-shadow: 0 16px 48px rgba(170, 111, 138, 0.12);
+}
+
+.account-panel h2 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  font-size: 19px;
+  color: #3d3341;
+}
+
+.account-hint {
+  margin: 0;
+  color: #806f85;
+  font-size: 13px;
+}
+
+.account-form {
+  display: grid;
+  gap: 14px;
+  margin-top: 4px;
+}
+
+.account-form-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.account-form label,
+.account-field {
+  display: grid;
+  gap: 6px;
+}
+
+.account-form label,
+.account-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: #65576b;
+}
+
+.account-shell input {
+  min-height: 42px;
+  padding: 0 12px;
+  border: 1px solid rgba(216, 156, 182, 0.4);
+  border-radius: 10px;
+  background: #fffdfd;
+  color: #3d3341;
+  font: inherit;
+  font-size: 15px;
+}
+
+.account-shell input:focus {
+  outline: 2px solid #d3527f;
+  outline-offset: 1px;
+}
+
+.account-swatches {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.account-swatch {
+  width: 32px;
+  height: 32px;
+  border: 2px solid transparent;
+  border-radius: 50%;
+  cursor: pointer;
+  box-shadow: 0 4px 12px rgba(75, 65, 50, 0.14);
+}
+
+.account-swatch.selected {
+  border-color: #3d3341;
+  transform: scale(1.1);
+}
+
+.account-primary-button,
+.account-ghost-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border-radius: 999px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.account-primary-button {
+  justify-self: start;
+  min-height: 44px;
+  padding: 0 20px;
+  border: 0;
+  color: #ffffff;
+  background: #d3527f;
+  box-shadow: 0 12px 26px rgba(211, 82, 127, 0.24);
+}
+
+.account-ghost-button {
+  min-height: 36px;
+  padding: 0 14px;
+  border: 1px solid rgba(216, 156, 182, 0.44);
+  color: #8a315f;
+  background: rgba(255, 255, 255, 0.9);
+  font-size: 13px;
+}
+
+.account-primary-button:disabled,
+.account-ghost-button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.account-error,
+.account-success {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  font-size: 13px;
+}
+
+.account-error {
+  color: #9a2b3f;
+  background: #fde3e7;
+}
+
+.account-success {
+  color: #2f6f5e;
+  background: #e5f1eb;
+}
+
+@media (max-width: 620px) {
+  .account-form-row {
+    grid-template-columns: 1fr;
+  }
+}
