@@ -1,4 +1,13 @@
-import { useMemo, useState, type CSSProperties, type FormEvent } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+  type CSSProperties,
+  type FormEvent,
+} from "react";
 import {
   ArrowRight,
   Banknote,
@@ -24,8 +33,24 @@ import {
   getRentShareCents,
   getRentStatus,
 } from "./calculations";
-import { currentUserId, expenses as mockExpenses, groupMembers, groups, rentMonths, users } from "./mockData";
+import { listMyGroups } from "../groups/groupsApi";
+import type { MyGroup } from "../groups/types";
+import { useAuth } from "../auth/AuthContext";
 import { formatMoney, parseMoneyToCents, splitEvenly } from "./money";
+import {
+  createPersonalExpense,
+  deletePersonalExpense,
+  listPersonalExpenses,
+  updatePersonalExpense,
+} from "./personalExpensesApi";
+import {
+  createRentMonth,
+  deleteGroupExpense,
+  listGroupExpenses,
+  listRentMonths,
+  saveGroupExpense,
+  setRentPayment,
+} from "./groupExpensesApi";
 import type {
   Expense,
   ExpenseContext,
@@ -46,8 +71,8 @@ type ShellControls = {
   onSidebarToggle: () => void;
 };
 
-const personalContext: ExpenseContext = { scope: "personal", ownerUserId: currentUserId };
-const defaultGroupId = "casa-tahoe";
+// ownerUserId ya no filtra nada: de los gastos personales se encarga Supabase.
+const personalContext: ExpenseContext = { scope: "personal", ownerUserId: "" };
 
 const expenseLabels: Record<ExpenseType, string> = {
   rent: "Alquiler",
@@ -61,31 +86,52 @@ const statusLabels = {
   partial: "Parcial",
 };
 
+const errorBoxStyle: CSSProperties = {
+  margin: 0,
+  padding: "10px 12px",
+  borderRadius: 10,
+  color: "#9a2b3f",
+  background: "#fde3e7",
+  fontSize: 13,
+};
+
 function getGroupContext(groupId: string): ExpenseContext {
   return { scope: "group", groupId };
 }
 
-function blankDraft(context: ExpenseContext, memberIds: MemberId[]): ExpenseDraft {
+function blankDraft(context: ExpenseContext, memberIds: MemberId[], payerId: MemberId): ExpenseDraft {
+  const today = new Date().toISOString().slice(0, 10);
+  const monthName = new Date().toLocaleDateString("es-AR", { month: "long" });
+
   return {
     scope: context.scope,
     type: context.scope === "personal" ? "other" : "grocery",
     category: context.scope === "personal" ? "Comida" : "Supermercado",
     description: "",
-    date: "2026-01-22",
+    date: today,
     amount: "",
-    paidBy: currentUserId,
+    paidBy: payerId,
     participantIds: memberIds,
-    rentMonthLabel: "Alquiler abril",
-    dueDate: "2026-04-05",
+    rentMonthLabel: `Alquiler ${monthName}`,
+    dueDate: today,
   };
 }
 
-function userName(userId: MemberId): string {
-  return users.find((user) => user.id === userId)?.name ?? userId;
+/**
+ * Quien es cada persona (nombre y color) sale de la base, no de un archivo
+ * fijo. Va por contexto para que cualquier tarjeta pueda resolver un id sin
+ * que haya que pasarlo por props hasta el fondo del arbol.
+ */
+const DirectoryContext = createContext<User[]>([]);
+
+function useDirectory(): User[] {
+  return useContext(DirectoryContext);
 }
 
-function userById(userId: MemberId): User {
-  return users.find((user) => user.id === userId) ?? users[0];
+function useUserName(): (userId: MemberId) => string {
+  const directory = useDirectory();
+
+  return (userId: MemberId) => directory.find((user) => user.id === userId)?.name ?? "Alguien";
 }
 
 function formatDate(value: string): string {
@@ -109,15 +155,17 @@ function isPersonalExpense(expense: Expense): expense is PersonalExpense {
 }
 
 function Avatar({ userId, small = false }: { userId: MemberId; small?: boolean }) {
-  const user = userById(userId);
+  const directory = useDirectory();
+  const user = directory.find((entry) => entry.id === userId);
+  const name = user?.name ?? "?";
 
   return (
     <span
       className={small ? "avatar avatar-small" : "avatar"}
-      style={{ "--member-color": user.color } as CSSProperties}
-      title={user.name}
+      style={{ "--member-color": user?.color ?? "#d36a97" } as CSSProperties}
+      title={name}
     >
-      {user.name.slice(0, 1)}
+      {name.slice(0, 1)}
     </span>
   );
 }
@@ -127,10 +175,8 @@ function StatusBadge({ status }: { status: "paid" | "pending" | "partial" }) {
 }
 
 export function ExpenseModuleV2({ sidebarCollapsed, onSidebarToggle }: ShellControls) {
-  const [context, setContext] = useState<ExpenseContext>(getGroupContext(defaultGroupId));
-  const [allRents, setAllRents] = useState<RentMonth[]>(rentMonths);
-  const [allExpenses, setAllExpenses] = useState<Expense[]>(mockExpenses);
-  const [activeRentId, setActiveRentId] = useState("rent-january");
+  const [context, setContext] = useState<ExpenseContext>(getGroupContext(""));
+  const [activeRentId, setActiveRentId] = useState("");
   const [showModal, setShowModal] = useState(false);
   const [editingExpenseId, setEditingExpenseId] = useState<string | null>(null);
   const [historyFilter, setHistoryFilter] = useState<FilterType>("all");
@@ -138,43 +184,148 @@ export function ExpenseModuleV2({ sidebarCollapsed, onSidebarToggle }: ShellCont
   const [monthFilter, setMonthFilter] = useState("all");
   const [paidSettlementIds, setPaidSettlementIds] = useState<string[]>([]);
 
-  const activeGroup = context.scope === "group" ? groups.find((group) => group.id === context.groupId) : undefined;
-  const userGroups = groups.filter((group) =>
-    groupMembers.some(
-      (membership) => membership.groupId === group.id && membership.userId === currentUserId,
-    ),
-  );
-  const activeGroupMembers = useMemo(() => {
-    if (context.scope !== "group") {
-      return [];
+  // Nada de esto sale ya de mockData: grupos, integrantes, gastos y alquiler
+  // vienen de Supabase, y las policies se encargan de que cada una vea lo suyo.
+  const { profile, user } = useAuth();
+  const currentUserId = user?.id ?? "";
+  const [personalExpenses, setPersonalExpenses] = useState<PersonalExpense[]>([]);
+  const [personalLoading, setPersonalLoading] = useState(true);
+  const [personalError, setPersonalError] = useState<string | null>(null);
+
+  const reloadPersonalExpenses = useCallback(async () => {
+    setPersonalError(null);
+
+    try {
+      setPersonalExpenses(await listPersonalExpenses());
+    } catch (caughtError) {
+      setPersonalError(
+        caughtError instanceof Error ? caughtError.message : "No pudimos cargar tus gastos personales.",
+      );
+    } finally {
+      setPersonalLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void reloadPersonalExpenses();
+  }, [reloadPersonalExpenses]);
+
+  const [myGroups, setMyGroups] = useState<MyGroup[]>([]);
+  const [dbGroupExpenses, setDbGroupExpenses] = useState<GroupExpense[]>([]);
+  const [dbRents, setDbRents] = useState<RentMonth[]>([]);
+  const [groupsLoaded, setGroupsLoaded] = useState(false);
+  const [groupLoading, setGroupLoading] = useState(true);
+  const [groupError, setGroupError] = useState<string | null>(null);
+
+  const reloadGroups = useCallback(async () => {
+    if (!currentUserId) {
+      return;
     }
 
-    const memberIds = groupMembers
-      .filter((membership) => membership.groupId === context.groupId)
-      .map((membership) => membership.userId);
+    try {
+      const nextGroups = await listMyGroups(currentUserId);
+      setMyGroups(nextGroups);
 
-    return users.filter((user) => memberIds.includes(user.id));
-  }, [context]);
+      // Si el grupo que estabas mirando ya no existe (o recien entras), cae al primero.
+      setContext((current) =>
+        current.scope === "group" && !nextGroups.some((group) => group.id === current.groupId)
+          ? getGroupContext(nextGroups[0]?.id ?? "")
+          : current,
+      );
+    } catch (caughtError) {
+      setGroupError(
+        caughtError instanceof Error ? caughtError.message : "No pudimos cargar tus grupos.",
+      );
+    } finally {
+      setGroupsLoaded(true);
+    }
+  }, [currentUserId]);
+
+  useEffect(() => {
+    void reloadGroups();
+  }, [reloadGroups]);
+
+  const activeGroupId = context.scope === "group" ? context.groupId : "";
+
+  const reloadGroupData = useCallback(async () => {
+    if (!activeGroupId) {
+      setDbGroupExpenses([]);
+      setDbRents([]);
+      setGroupLoading(false);
+      return;
+    }
+
+    setGroupError(null);
+
+    try {
+      const [nextExpenses, nextRents] = await Promise.all([
+        listGroupExpenses(activeGroupId),
+        listRentMonths(activeGroupId),
+      ]);
+
+      setDbGroupExpenses(nextExpenses);
+      setDbRents(nextRents);
+    } catch (caughtError) {
+      setGroupError(
+        caughtError instanceof Error
+          ? caughtError.message
+          : "No pudimos cargar los gastos del grupo.",
+      );
+    } finally {
+      setGroupLoading(false);
+    }
+  }, [activeGroupId]);
+
+  useEffect(() => {
+    void reloadGroupData();
+  }, [reloadGroupData]);
+
+  const activeGroup = myGroups.find((group) => group.id === activeGroupId);
+  const userGroups = myGroups;
+
+  // Todas las personas que pueden aparecer en pantalla, para resolver nombres y colores.
+  const directory = useMemo<User[]>(() => {
+    const known = new Map<string, User>();
+
+    myGroups.forEach((group) =>
+      group.members.forEach((member) => {
+        if (!known.has(member.userId)) {
+          known.set(member.userId, { id: member.userId, name: member.name, color: member.color });
+        }
+      }),
+    );
+
+    if (profile && !known.has(profile.id)) {
+      known.set(profile.id, { id: profile.id, name: profile.name, color: profile.color });
+    }
+
+    return Array.from(known.values());
+  }, [myGroups, profile]);
+
+  const activeGroupMembers = useMemo<User[]>(
+    () =>
+      (activeGroup?.members ?? []).map((member) => ({
+        id: member.userId,
+        name: member.name,
+        color: member.color,
+      })),
+    [activeGroup],
+  );
 
   const activeMemberIds = activeGroupMembers.map((member) => member.id);
-  const [draft, setDraft] = useState(() => blankDraft(getGroupContext(defaultGroupId), activeMemberIds));
+  const [draft, setDraft] = useState(() => blankDraft(getGroupContext(""), [], ""));
 
-  const contextRents = allRents.filter(
-    (rent) => context.scope === "group" && rent.groupId === context.groupId,
-  );
-  const contextExpenses = allExpenses.filter((expense) => {
-    if (context.scope === "personal") {
-      return expense.scope === "personal" && expense.ownerUserId === context.ownerUserId;
-    }
-
-    return expense.scope === "group" && expense.groupId === context.groupId;
-  });
+  // Las consultas ya vienen filtradas por grupo, no hace falta filtrar de nuevo.
+  const contextRents = context.scope === "group" ? dbRents : [];
+  const contextExpenses: Expense[] =
+    context.scope === "personal" ? personalExpenses : dbGroupExpenses;
   const groupExpenses = contextExpenses.filter(isGroupExpense);
-  const personalExpenses = contextExpenses.filter(isPersonalExpense);
 
   const activeRent =
     contextRents.find((rent) => rent.id === activeRentId) ?? contextRents[0] ?? null;
-  const activeMonthKey = activeRent ? getMonthKey(activeRent.dueDate) : "2026-01";
+  const activeMonthKey = activeRent
+    ? getMonthKey(activeRent.dueDate)
+    : new Date().toISOString().slice(0, 7);
 
   const { directTransfers, simplifiedSettlements } = useMemo(
     () =>
@@ -202,7 +353,10 @@ export function ExpenseModuleV2({ sidebarCollapsed, onSidebarToggle }: ShellCont
   const currentMonthExpenses = contextExpenses.filter(
     (expense) => getMonthKey(expense.date) === activeMonthKey,
   );
-  const personalMonthTotal = personalExpenses.reduce((total, expense) => total + expense.amountCents, 0);
+  const thisMonthKey = new Date().toISOString().slice(0, 7);
+  const personalMonthTotal = personalExpenses
+    .filter((expense) => getMonthKey(expense.date) === thisMonthKey)
+    .reduce((total, expense) => total + expense.amountCents, 0);
   const groupMonthTotal =
     (activeRent?.totalCents ?? 0) +
     currentMonthExpenses.reduce((total, expense) => total + expense.amountCents, 0);
@@ -265,9 +419,9 @@ export function ExpenseModuleV2({ sidebarCollapsed, onSidebarToggle }: ShellCont
   const switchContext = (nextContext: ExpenseContext) => {
     const nextMembers =
       nextContext.scope === "group"
-        ? groupMembers
-            .filter((membership) => membership.groupId === nextContext.groupId)
-            .map((membership) => membership.userId)
+        ? (myGroups.find((group) => group.id === nextContext.groupId)?.members ?? []).map(
+            (member) => member.userId,
+          )
         : [currentUserId];
 
     setContext(nextContext);
@@ -275,17 +429,18 @@ export function ExpenseModuleV2({ sidebarCollapsed, onSidebarToggle }: ShellCont
     setPersonFilter("all");
     setMonthFilter("all");
     setEditingExpenseId(null);
-    setDraft(blankDraft(nextContext, nextMembers));
-    setActiveRentId(
-      allRents.find((rent) => nextContext.scope === "group" && rent.groupId === nextContext.groupId)
-        ?.id ?? "",
-    );
+    setDraft(blankDraft(nextContext, nextMembers, currentUserId));
+    setActiveRentId("");
   };
 
   const openNewExpense = (type: ExpenseType = context.scope === "personal" ? "other" : "grocery") => {
     setEditingExpenseId(null);
     setDraft({
-      ...blankDraft(context, context.scope === "group" ? activeMemberIds : [currentUserId]),
+      ...blankDraft(
+        context,
+        context.scope === "group" ? activeMemberIds : [currentUserId],
+        currentUserId,
+      ),
       type: context.scope === "personal" ? "other" : type,
       category: type === "rent" ? "Alquiler" : type === "grocery" ? "Supermercado" : "Otros",
     });
@@ -326,23 +481,35 @@ export function ExpenseModuleV2({ sidebarCollapsed, onSidebarToggle }: ShellCont
     }
 
     if (context.scope === "personal") {
-      const nextExpense: PersonalExpense = {
-        id: editingExpenseId ?? `personal-${Date.now()}`,
-        scope: "personal",
-        ownerUserId: currentUserId,
-        type: "other",
+      const input = {
         category: draft.category.trim() || "Otros",
         description: draft.description.trim() || draft.category.trim() || "Gasto personal",
         date: draft.date,
         amountCents: draftAmountCents,
       };
+      const idToEdit = editingExpenseId;
 
-      setAllExpenses((current) =>
-        editingExpenseId
-          ? current.map((expense) => (expense.id === editingExpenseId ? nextExpense : expense))
-          : [nextExpense, ...current],
-      );
-      setShowModal(false);
+      void (async () => {
+        setPersonalError(null);
+
+        try {
+          if (idToEdit) {
+            await updatePersonalExpense(idToEdit, input);
+          } else {
+            await createPersonalExpense(input);
+          }
+
+          await reloadPersonalExpenses();
+          setShowModal(false);
+          setEditingExpenseId(null);
+        } catch (caughtError) {
+          // El modal queda abierto para no perder lo que escribio.
+          setPersonalError(
+            caughtError instanceof Error ? caughtError.message : "No pudimos guardar el gasto.",
+          );
+        }
+      })();
+
       return;
     }
 
@@ -350,68 +517,71 @@ export function ExpenseModuleV2({ sidebarCollapsed, onSidebarToggle }: ShellCont
       return;
     }
 
-    if (draft.type === "rent") {
-      const payments = Object.fromEntries(
-        draft.participantIds.map((memberId) => [
-          memberId,
-          memberId === draft.paidBy ? "paid" : "pending",
-        ]),
-      ) as RentMonth["payments"];
+    const groupId = context.groupId;
+    const idToEdit = editingExpenseId;
+    const isRent = draft.type === "rent";
+    const rentInput = {
+      label: draft.rentMonthLabel.trim() || "Nuevo alquiler",
+      month: draft.rentMonthLabel.replace("Alquiler", "").trim() || "Nuevo mes",
+      totalCents: draftAmountCents,
+      dueDate: draft.dueDate,
+      paidBy: draft.paidBy,
+      participantIds: draft.participantIds,
+    };
+    const expenseInput = {
+      id: idToEdit,
+      type: (draft.type === "grocery" ? "grocery" : "other") as "grocery" | "other",
+      category: draft.category.trim() || expenseLabels[draft.type],
+      description: draft.description.trim() || expenseLabels[draft.type],
+      amountCents: draftAmountCents,
+      date: draft.date,
+      paidBy: draft.paidBy,
+      participantIds: draft.participantIds,
+    };
 
-      const newRent: RentMonth = {
-        id: `rent-${Date.now()}`,
-        scope: "group",
-        groupId: context.groupId,
-        label: draft.rentMonthLabel.trim() || "Nuevo alquiler",
-        month: draft.rentMonthLabel.replace("Alquiler", "").trim() || "Nuevo mes",
-        totalCents: draftAmountCents,
-        dueDate: draft.dueDate,
-        paidBy: draft.paidBy,
-        participantIds: draft.participantIds,
-        payments,
-      };
+    void (async () => {
+      setGroupError(null);
 
-      setAllRents((current) => [newRent, ...current]);
-      setActiveRentId(newRent.id);
-    } else {
-      const nextExpense: GroupExpense = {
-        id: editingExpenseId ?? `group-${Date.now()}`,
-        scope: "group",
-        groupId: context.groupId,
-        type: draft.type,
-        category: draft.category.trim() || expenseLabels[draft.type],
-        description: draft.description.trim() || expenseLabels[draft.type],
-        date: draft.date,
-        amountCents: draftAmountCents,
-        paidBy: draft.paidBy,
-        participantIds: draft.participantIds,
-      };
+      try {
+        if (isRent) {
+          await createRentMonth(groupId, rentInput);
+        } else {
+          await saveGroupExpense(groupId, expenseInput);
+        }
 
-      setAllExpenses((current) =>
-        editingExpenseId
-          ? current.map((expense) => (expense.id === editingExpenseId ? nextExpense : expense))
-          : [nextExpense, ...current],
-      );
-    }
-
-    setShowModal(false);
-    setEditingExpenseId(null);
+        await reloadGroupData();
+        setShowModal(false);
+        setEditingExpenseId(null);
+      } catch (caughtError) {
+        // El modal queda abierto para no perder lo que escribio.
+        setGroupError(
+          caughtError instanceof Error ? caughtError.message : "No pudimos guardar el gasto.",
+        );
+      }
+    })();
   };
 
   const toggleRentPayment = (rentId: string, memberId: MemberId) => {
-    setAllRents((current) =>
-      current.map((rent) =>
-        rent.id === rentId
-          ? {
-              ...rent,
-              payments: {
-                ...rent.payments,
-                [memberId]: rent.payments[memberId] === "paid" ? "pending" : "paid",
-              },
-            }
-          : rent,
-      ),
-    );
+    const rent = dbRents.find((entry) => entry.id === rentId);
+
+    if (!rent) {
+      return;
+    }
+
+    const nextStatus = rent.payments[memberId] === "paid" ? "pending" : "paid";
+
+    void (async () => {
+      setGroupError(null);
+
+      try {
+        await setRentPayment(rentId, memberId, nextStatus);
+        await reloadGroupData();
+      } catch (caughtError) {
+        setGroupError(
+          caughtError instanceof Error ? caughtError.message : "No pudimos actualizar el pago.",
+        );
+      }
+    })();
   };
 
   const toggleSettlement = (settlement: Settlement) => {
@@ -429,11 +599,40 @@ export function ExpenseModuleV2({ sidebarCollapsed, onSidebarToggle }: ShellCont
   };
 
   const deleteExpense = (expenseId: string) => {
-    setAllExpenses((current) => current.filter((expense) => expense.id !== expenseId));
+    if (context.scope === "personal") {
+      void (async () => {
+        setPersonalError(null);
+
+        try {
+          await deletePersonalExpense(expenseId);
+          await reloadPersonalExpenses();
+        } catch (caughtError) {
+          setPersonalError(
+            caughtError instanceof Error ? caughtError.message : "No pudimos borrar el gasto.",
+          );
+        }
+      })();
+
+      return;
+    }
+
+    void (async () => {
+      setGroupError(null);
+
+      try {
+        await deleteGroupExpense(expenseId);
+        await reloadGroupData();
+      } catch (caughtError) {
+        setGroupError(
+          caughtError instanceof Error ? caughtError.message : "No pudimos borrar el gasto.",
+        );
+      }
+    })();
   };
 
   return (
-    <main className={`app-shell ${sidebarCollapsed ? "sidebar-collapsed" : ""}`}>
+    <DirectoryContext.Provider value={directory}>
+      <main className={`app-shell ${sidebarCollapsed ? "sidebar-collapsed" : ""}`}>
       <aside className="sidebar">
         <div className="brand">
           <div className="brand-mark">
@@ -525,7 +724,7 @@ export function ExpenseModuleV2({ sidebarCollapsed, onSidebarToggle }: ShellCont
           <button
             className={context.scope === "group" ? "active" : ""}
             type="button"
-            onClick={() => switchContext(getGroupContext(activeGroup?.id ?? defaultGroupId))}
+            onClick={() => switchContext(getGroupContext(activeGroup?.id ?? userGroups[0]?.id ?? ""))}
           >
             <UsersRound size={18} />
             Grupo
@@ -534,7 +733,7 @@ export function ExpenseModuleV2({ sidebarCollapsed, onSidebarToggle }: ShellCont
             Grupo activo
             <select
               disabled={context.scope !== "group"}
-              value={context.scope === "group" ? context.groupId : activeGroup?.id ?? defaultGroupId}
+              value={context.scope === "group" ? context.groupId : activeGroup?.id ?? userGroups[0]?.id ?? ""}
               onChange={(event) => switchContext(getGroupContext(event.target.value))}
             >
               {userGroups.map((group) => (
@@ -546,9 +745,14 @@ export function ExpenseModuleV2({ sidebarCollapsed, onSidebarToggle }: ShellCont
           </label>
         </section>
 
+        {groupError && context.scope === "group" ? <p style={errorBoxStyle}>{groupError}</p> : null}
+
         {context.scope === "personal" ? (
           <PersonalView
             expenses={personalExpenses}
+            ownerName={profile?.name ?? "vos"}
+            loading={personalLoading}
+            error={personalError}
             historyItems={historyItems}
             monthFilter={monthFilter}
             personalMonthTotal={personalMonthTotal}
@@ -558,6 +762,21 @@ export function ExpenseModuleV2({ sidebarCollapsed, onSidebarToggle }: ShellCont
             openNewExpense={() => openNewExpense("other")}
             availableMonths={availableMonths}
           />
+        ) : !groupsLoaded ? (
+          <section className="panel">
+            <p>Cargando tus grupos...</p>
+          </section>
+        ) : userGroups.length === 0 ? (
+          <section className="panel">
+            <p>
+              Todavia no sos parte de ningun grupo. Crea uno desde Grupos, en el menu de la
+              izquierda, o pedile el link de invitacion a una amiga.
+            </p>
+          </section>
+        ) : groupLoading ? (
+          <section className="panel">
+            <p>Cargando los gastos del grupo...</p>
+          </section>
         ) : (
           <GroupView
             activeRent={activeRent}
@@ -598,6 +817,7 @@ export function ExpenseModuleV2({ sidebarCollapsed, onSidebarToggle }: ShellCont
           draftAmountCents={draftAmountCents}
           draftShareCents={draftShareCents}
           editingExpenseId={editingExpenseId}
+          error={context.scope === "personal" ? personalError : groupError}
           members={activeGroupMembers}
           onClose={() => setShowModal(false)}
           onParticipantToggle={setParticipant}
@@ -612,12 +832,16 @@ export function ExpenseModuleV2({ sidebarCollapsed, onSidebarToggle }: ShellCont
           onUpdate={setDraft}
         />
       ) : null}
-    </main>
+      </main>
+    </DirectoryContext.Provider>
   );
 }
 
 function PersonalView({
   expenses,
+  ownerName,
+  loading,
+  error,
   personalMonthTotal,
   historyItems,
   availableMonths,
@@ -628,6 +852,9 @@ function PersonalView({
   openNewExpense,
 }: {
   expenses: PersonalExpense[];
+  ownerName: string;
+  loading: boolean;
+  error: string | null;
   personalMonthTotal: number;
   historyItems: HistoryItem[];
   availableMonths: string[];
@@ -653,22 +880,31 @@ function PersonalView({
 
       <section className="panel">
         <div className="panel-title">
-          <h2>Gastos privados de Juli</h2>
+          <h2>Gastos privados de {ownerName}</h2>
           <button className="small-button" type="button" onClick={openNewExpense}>
             <Plus size={16} />
             Agregar
           </button>
         </div>
-        <div className="expense-grid">
-          {expenses.map((expense) => (
-            <PersonalExpenseCard
-              expense={expense}
-              key={expense.id}
-              onDelete={() => onDelete(expense.id)}
-              onEdit={() => onEdit(expense)}
-            />
-          ))}
-        </div>
+
+        {error ? <p style={errorBoxStyle}>{error}</p> : null}
+
+        {loading ? (
+          <p>Cargando tus gastos...</p>
+        ) : expenses.length === 0 ? (
+          <p>Todavia no cargaste ningun gasto personal. Agrega el primero con el boton de arriba.</p>
+        ) : (
+          <div className="expense-grid">
+            {expenses.map((expense) => (
+              <PersonalExpenseCard
+                expense={expense}
+                key={expense.id}
+                onDelete={() => onDelete(expense.id)}
+                onEdit={() => onEdit(expense)}
+              />
+            ))}
+          </div>
+        )}
       </section>
 
       <section className="panel">
@@ -757,6 +993,7 @@ function GroupView({
   onRentPaymentToggle: (rentId: string, memberId: string) => void;
   onSettlementToggle: (settlement: Settlement) => void;
 }) {
+  const userName = useUserName();
   const rentPaidCents = activeRent ? getRentPaidCents(activeRent) : 0;
   const rentProgress = activeRent ? Math.round((rentPaidCents / activeRent.totalCents) * 100) : 0;
   const pendingOptimizedSettlements = settlements.filter((settlement) => settlement.status === "pending");
@@ -1039,12 +1276,14 @@ function ExpenseModal({
   onSave,
   onSelectAll,
   onUpdate,
+  error,
 }: {
   context: ExpenseContext;
   draft: ExpenseDraft;
   draftAmountCents: number;
   draftShareCents: number;
   editingExpenseId: string | null;
+  error: string | null;
   members: User[];
   onClose: () => void;
   onParticipantToggle: (memberId: string) => void;
@@ -1052,6 +1291,8 @@ function ExpenseModal({
   onSelectAll: () => void;
   onUpdate: React.Dispatch<React.SetStateAction<ExpenseDraft>>;
 }) {
+  const userName = useUserName();
+
   return (
     <div className="modal-backdrop" role="presentation">
       <form className="expense-modal" onSubmit={onSave}>
@@ -1210,6 +1451,8 @@ function ExpenseModal({
           )}
         </div>
 
+        {error ? <p style={errorBoxStyle}>{error}</p> : null}
+
         <button className="primary-button" type="submit">
           Guardar
         </button>
@@ -1266,6 +1509,8 @@ function SettlementRow({
   settlement: Settlement;
   onToggle: () => void;
 }) {
+  const userName = useUserName();
+
   return (
     <button className={`settlement-row ${settlement.status}`} type="button" onClick={onToggle}>
       <div className="settlement-person">
@@ -1348,6 +1593,8 @@ function GroupExpenseCard({
   onEdit: () => void;
   onDelete: () => void;
 }) {
+  const userName = useUserName();
+  const directory = useDirectory();
   const shareCents = Math.round(expense.amountCents / expense.participantIds.length);
 
   return (
@@ -1363,7 +1610,7 @@ function GroupExpenseCard({
         <strong>{formatMoney(expense.amountCents)}</strong>
       </div>
       <div className="participants">
-        {users.map((user) => (
+        {directory.map((user) => (
           <span className={expense.participantIds.includes(user.id) ? "included" : ""} key={user.id}>
             <Avatar userId={user.id} small />
             {user.name}
