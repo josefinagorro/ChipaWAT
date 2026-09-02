@@ -1,26 +1,16 @@
-import type { ShoppingContext, ShoppingItem } from "./types";
-import type { UserId } from "../expenses/types";
+import type { ShoppingItem } from "./types";
 
-export function getShoppingItemsForContext(
-  items: ShoppingItem[],
-  context: ShoppingContext,
-  currentUserId: UserId,
-): ShoppingItem[] {
-  return items
-    .filter((item) => {
-      if (context.scope === "personal") {
-        return item.scope === "personal" && item.ownerUserId === currentUserId;
-      }
+// El filtro por contexto (personal vs. grupo activo) ya lo hace la consulta
+// a Supabase (cada API trae solo lo que corresponde); acá queda solo el
+// orden: pendientes primero, y entre pendientes/comprados, lo más nuevo arriba.
+export function sortShoppingItems(items: ShoppingItem[]): ShoppingItem[] {
+  return [...items].sort((first, second) => {
+    if (first.status !== second.status) {
+      return first.status === "pending" ? -1 : 1;
+    }
 
-      return item.scope === "group" && item.groupId === context.groupId;
-    })
-    .sort((first, second) => {
-      if (first.status !== second.status) {
-        return first.status === "pending" ? -1 : 1;
-      }
-
-      return second.createdAt.localeCompare(first.createdAt);
-    });
+    return second.createdAt.localeCompare(first.createdAt);
+  });
 }
 
 export function getShoppingProgress(items: ShoppingItem[]): {

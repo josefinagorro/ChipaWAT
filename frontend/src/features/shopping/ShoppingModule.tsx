@@ -1,9 +1,8 @@
-import { useMemo, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useState, type CSSProperties, type FormEvent } from "react";
 import {
   CalendarDays,
   CheckCircle2,
   CircleDollarSign,
-  Home,
   PanelLeftClose,
   PanelLeftOpen,
   Plus,
@@ -12,20 +11,40 @@ import {
   UserRound,
   UsersRound,
 } from "lucide-react";
-import { currentUserId, groupMembers, groups, users } from "../expenses/mockData";
-import type { ExpenseContext, GroupId, UserId } from "../expenses/types";
-import { shoppingItems as mockShoppingItems } from "./mockData";
-import { getShoppingItemsForContext, getShoppingProgress } from "./shoppingLogic";
+import { useAuth } from "../auth/AuthContext";
+import { listMyGroups } from "../groups/groupsApi";
+import type { MyGroup } from "../groups/types";
+import type { ExpenseContext, User, UserId } from "../expenses/types";
+import {
+  createGroupShoppingItem,
+  deleteGroupShoppingItem,
+  listGroupShoppingItems,
+  setGroupShoppingItemStatus,
+} from "./groupShoppingApi";
+import {
+  createPersonalShoppingItem,
+  deletePersonalShoppingItem,
+  listPersonalShoppingItems,
+  setPersonalShoppingItemStatus,
+} from "./personalShoppingApi";
+import { getShoppingProgress, sortShoppingItems } from "./shoppingLogic";
 import type { ShoppingDraft, ShoppingItem } from "./types";
-
-const defaultGroupId = "casa-tahoe";
 
 type ShellControls = {
   sidebarCollapsed: boolean;
   onSidebarToggle: () => void;
 };
 
-function getGroupContext(groupId: GroupId): ExpenseContext {
+const errorBoxStyle: CSSProperties = {
+  margin: 0,
+  padding: "10px 12px",
+  borderRadius: 10,
+  color: "#9a2b3f",
+  background: "#fde3e7",
+  fontSize: 13,
+};
+
+function getGroupContext(groupId: string): ExpenseContext {
   return { scope: "group", groupId };
 }
 
@@ -39,30 +58,127 @@ function blankDraft(): ShoppingDraft {
   };
 }
 
-function userName(userId?: UserId): string {
-  return users.find((user) => user.id === userId)?.name ?? "Sin asignar";
+function userName(directory: User[], userId?: UserId): string {
+  return directory.find((user) => user.id === userId)?.name ?? "Sin asignar";
 }
 
 export function ShoppingModule({ sidebarCollapsed, onSidebarToggle }: ShellControls) {
-  const [context, setContext] = useState<ExpenseContext>(getGroupContext(defaultGroupId));
-  const [items, setItems] = useState<ShoppingItem[]>(mockShoppingItems);
+  const { profile, user } = useAuth();
+  const currentUserId = user?.id ?? "";
+
+  const [context, setContext] = useState<ExpenseContext>({ scope: "personal", ownerUserId: "" });
   const [draft, setDraft] = useState(blankDraft);
   const [showBought, setShowBought] = useState(true);
 
-  const activeGroup = context.scope === "group" ? groups.find((group) => group.id === context.groupId) : undefined;
-  const userGroups = groups.filter((group) =>
-    groupMembers.some(
-      (membership) => membership.groupId === group.id && membership.userId === currentUserId,
-    ),
-  );
-  const contextItems = useMemo(
-    () => getShoppingItemsForContext(items, context, currentUserId),
-    [context, items],
-  );
-  const visibleItems = showBought
-    ? contextItems
-    : contextItems.filter((item) => item.status === "pending");
-  const progress = getShoppingProgress(contextItems);
+  // Nada de esto sale de un archivo mock: grupos e items vienen de Supabase,
+  // y las policies se encargan de que cada una vea lo suyo.
+  const [personalItems, setPersonalItems] = useState<ShoppingItem[]>([]);
+  const [personalLoading, setPersonalLoading] = useState(true);
+  const [personalError, setPersonalError] = useState<string | null>(null);
+
+  const reloadPersonalItems = useCallback(async () => {
+    setPersonalError(null);
+
+    try {
+      setPersonalItems(await listPersonalShoppingItems());
+    } catch (caughtError) {
+      setPersonalError(
+        caughtError instanceof Error ? caughtError.message : "No pudimos cargar tu lista personal.",
+      );
+    } finally {
+      setPersonalLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void reloadPersonalItems();
+  }, [reloadPersonalItems]);
+
+  const [myGroups, setMyGroups] = useState<MyGroup[]>([]);
+  const [groupsLoaded, setGroupsLoaded] = useState(false);
+  const [groupsError, setGroupsError] = useState<string | null>(null);
+
+  const reloadGroups = useCallback(async () => {
+    if (!currentUserId) {
+      return;
+    }
+
+    try {
+      const nextGroups = await listMyGroups(currentUserId);
+      setMyGroups(nextGroups);
+
+      // Si el grupo que estabas mirando ya no existe (o recien entras), cae al primero.
+      setContext((current) =>
+        current.scope === "group" && !nextGroups.some((group) => group.id === current.groupId)
+          ? getGroupContext(nextGroups[0]?.id ?? "")
+          : current,
+      );
+    } catch (caughtError) {
+      setGroupsError(caughtError instanceof Error ? caughtError.message : "No pudimos cargar tus grupos.");
+    } finally {
+      setGroupsLoaded(true);
+    }
+  }, [currentUserId]);
+
+  useEffect(() => {
+    void reloadGroups();
+  }, [reloadGroups]);
+
+  const activeGroupId = context.scope === "group" ? context.groupId : "";
+  const activeGroup = myGroups.find((group) => group.id === activeGroupId);
+
+  const [groupItems, setGroupItems] = useState<ShoppingItem[]>([]);
+  const [groupLoading, setGroupLoading] = useState(true);
+  const [groupError, setGroupError] = useState<string | null>(null);
+
+  const reloadGroupItems = useCallback(async () => {
+    if (!activeGroupId) {
+      setGroupItems([]);
+      setGroupLoading(false);
+      return;
+    }
+
+    setGroupError(null);
+
+    try {
+      setGroupItems(await listGroupShoppingItems(activeGroupId));
+    } catch (caughtError) {
+      setGroupError(
+        caughtError instanceof Error ? caughtError.message : "No pudimos cargar la lista del grupo.",
+      );
+    } finally {
+      setGroupLoading(false);
+    }
+  }, [activeGroupId]);
+
+  useEffect(() => {
+    void reloadGroupItems();
+  }, [reloadGroupItems]);
+
+  // Para mostrar "lo cargó..." / "comprado por...": siempre incluye a la
+  // propia usuaria, y a las demás integrantes cuando hay un grupo activo.
+  const directory = useMemo<User[]>(() => {
+    const known = new Map<string, User>();
+
+    if (profile) {
+      known.set(profile.id, { id: profile.id, name: profile.name, color: profile.color });
+    }
+
+    (activeGroup?.members ?? []).forEach((member) => {
+      if (!known.has(member.userId)) {
+        known.set(member.userId, { id: member.userId, name: member.name, color: member.color });
+      }
+    });
+
+    return Array.from(known.values());
+  }, [profile, activeGroup]);
+
+  const contextItems = context.scope === "personal" ? personalItems : groupItems;
+  const sortedItems = useMemo(() => sortShoppingItems(contextItems), [contextItems]);
+  const visibleItems = showBought ? sortedItems : sortedItems.filter((item) => item.status === "pending");
+  const progress = getShoppingProgress(sortedItems);
+
+  const bannerError = context.scope === "personal" ? personalError : groupsError ?? groupError;
 
   const addItem = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -71,43 +187,111 @@ export function ShoppingModule({ sidebarCollapsed, onSidebarToggle }: ShellContr
       return;
     }
 
-    const nextItem: ShoppingItem = {
-      id: `shopping-${Date.now()}`,
-      scope: context.scope,
-      ownerUserId: context.scope === "personal" ? currentUserId : undefined,
-      groupId: context.scope === "group" ? context.groupId : undefined,
+    const input = {
       name: draft.name.trim(),
       quantity: draft.quantity.trim() || "1",
       category: draft.category.trim() || "Super",
-      suggestedStore: draft.suggestedStore.trim() || undefined,
-      notes: draft.notes.trim() || undefined,
-      status: "pending",
-      createdByUserId: currentUserId,
-      createdAt: new Date().toISOString(),
+      suggestedStore: draft.suggestedStore.trim(),
+      notes: draft.notes.trim(),
     };
 
-    setItems((current) => [nextItem, ...current]);
-    setDraft(blankDraft());
+    if (context.scope === "personal") {
+      void (async () => {
+        setPersonalError(null);
+
+        try {
+          await createPersonalShoppingItem(input);
+          await reloadPersonalItems();
+          setDraft(blankDraft());
+        } catch (caughtError) {
+          setPersonalError(
+            caughtError instanceof Error ? caughtError.message : "No pudimos cargar el item.",
+          );
+        }
+      })();
+
+      return;
+    }
+
+    const groupId = context.groupId;
+
+    void (async () => {
+      setGroupError(null);
+
+      try {
+        await createGroupShoppingItem(groupId, input);
+        await reloadGroupItems();
+        setDraft(blankDraft());
+      } catch (caughtError) {
+        setGroupError(caughtError instanceof Error ? caughtError.message : "No pudimos cargar el item.");
+      }
+    })();
   };
 
-  const toggleBought = (itemId: string) => {
-    setItems((current) =>
-      current.map((item) =>
-        item.id === itemId
-          ? {
-              ...item,
-              status: item.status === "bought" ? "pending" : "bought",
-              boughtByUserId: item.status === "bought" ? undefined : currentUserId,
-              boughtAt: item.status === "bought" ? undefined : new Date().toISOString(),
-            }
-          : item,
-      ),
-    );
+  const toggleBought = (item: ShoppingItem) => {
+    const nextStatus = item.status === "bought" ? "pending" : "bought";
+
+    if (item.scope === "personal") {
+      void (async () => {
+        setPersonalError(null);
+
+        try {
+          await setPersonalShoppingItemStatus(item.id, nextStatus);
+          await reloadPersonalItems();
+        } catch (caughtError) {
+          setPersonalError(
+            caughtError instanceof Error ? caughtError.message : "No pudimos actualizar el item.",
+          );
+        }
+      })();
+
+      return;
+    }
+
+    void (async () => {
+      setGroupError(null);
+
+      try {
+        await setGroupShoppingItemStatus(item.id, nextStatus, nextStatus === "bought" ? currentUserId : null);
+        await reloadGroupItems();
+      } catch (caughtError) {
+        setGroupError(caughtError instanceof Error ? caughtError.message : "No pudimos actualizar el item.");
+      }
+    })();
   };
 
-  const deleteItem = (itemId: string) => {
-    setItems((current) => current.filter((item) => item.id !== itemId));
+  const deleteItem = (item: ShoppingItem) => {
+    if (item.scope === "personal") {
+      void (async () => {
+        setPersonalError(null);
+
+        try {
+          await deletePersonalShoppingItem(item.id);
+          await reloadPersonalItems();
+        } catch (caughtError) {
+          setPersonalError(
+            caughtError instanceof Error ? caughtError.message : "No pudimos borrar el item.",
+          );
+        }
+      })();
+
+      return;
+    }
+
+    void (async () => {
+      setGroupError(null);
+
+      try {
+        await deleteGroupShoppingItem(item.id);
+        await reloadGroupItems();
+      } catch (caughtError) {
+        setGroupError(caughtError instanceof Error ? caughtError.message : "No pudimos borrar el item.");
+      }
+    })();
   };
+
+  const isLoadingList =
+    context.scope === "personal" ? personalLoading : !groupsLoaded || groupLoading;
 
   return (
     <main className={`app-shell shopping-shell ${sidebarCollapsed ? "sidebar-collapsed" : ""}`}>
@@ -118,7 +302,7 @@ export function ShoppingModule({ sidebarCollapsed, onSidebarToggle }: ShellContr
           </div>
           <div>
             <strong>ChipaWAT</strong>
-            <span>{context.scope === "personal" ? "Mi super" : activeGroup?.name}</span>
+            <span>{context.scope === "personal" ? "Mi super" : activeGroup?.name ?? "Sin grupo"}</span>
           </div>
         </div>
         <button
@@ -160,7 +344,7 @@ export function ShoppingModule({ sidebarCollapsed, onSidebarToggle }: ShellContr
       <section className="content" id="super">
         <header className="module-header">
           <div>
-            <span className="eyebrow">{context.scope === "personal" ? "Mi lista" : activeGroup?.name}</span>
+            <span className="eyebrow">{context.scope === "personal" ? "Mi lista" : activeGroup?.name ?? "Grupo activo"}</span>
             <h1>{context.scope === "personal" ? "Super personal" : "Super grupal"}</h1>
             <p>
               {context.scope === "personal"
@@ -182,7 +366,7 @@ export function ShoppingModule({ sidebarCollapsed, onSidebarToggle }: ShellContr
           <button
             className={context.scope === "group" ? "active" : ""}
             type="button"
-            onClick={() => setContext(getGroupContext(activeGroup?.id ?? defaultGroupId))}
+            onClick={() => setContext(getGroupContext(activeGroup?.id ?? myGroups[0]?.id ?? ""))}
           >
             <UsersRound size={18} />
             Grupo
@@ -190,11 +374,11 @@ export function ShoppingModule({ sidebarCollapsed, onSidebarToggle }: ShellContr
           <label className="group-select">
             Grupo activo
             <select
-              disabled={context.scope !== "group"}
-              value={context.scope === "group" ? context.groupId : activeGroup?.id ?? defaultGroupId}
+              disabled={context.scope !== "group" || myGroups.length === 0}
+              value={context.scope === "group" ? context.groupId : activeGroup?.id ?? myGroups[0]?.id ?? ""}
               onChange={(event) => setContext(getGroupContext(event.target.value))}
             >
-              {userGroups.map((group) => (
+              {myGroups.map((group) => (
                 <option key={group.id} value={group.id}>
                   {group.name}
                 </option>
@@ -202,6 +386,8 @@ export function ShoppingModule({ sidebarCollapsed, onSidebarToggle }: ShellContr
             </select>
           </label>
         </section>
+
+        {bannerError ? <p style={errorBoxStyle}>{bannerError}</p> : null}
 
         <section className="shopping-layout">
           <article className="panel shopping-form-panel">
@@ -254,7 +440,11 @@ export function ShoppingModule({ sidebarCollapsed, onSidebarToggle }: ShellContr
                   placeholder="Marca, tamaño, preferencia..."
                 />
               </label>
-              <button className="primary-button" type="submit">
+              <button
+                className="primary-button"
+                type="submit"
+                disabled={context.scope === "group" && (!groupsLoaded || myGroups.length === 0)}
+              >
                 <Plus size={18} />
                 Cargar item
               </button>
@@ -290,7 +480,16 @@ export function ShoppingModule({ sidebarCollapsed, onSidebarToggle }: ShellContr
             <ShoppingBasket size={18} />
           </div>
           <div className="shopping-list">
-            {visibleItems.length === 0 ? (
+            {context.scope === "group" && !groupsLoaded ? (
+              <p>Cargando tus grupos...</p>
+            ) : context.scope === "group" && myGroups.length === 0 ? (
+              <p>
+                Todavia no sos parte de ningun grupo. Crea uno desde Grupos, en el menu de la izquierda, o
+                pedile el link de invitacion a una amiga.
+              </p>
+            ) : isLoadingList ? (
+              <p>Cargando tu lista...</p>
+            ) : visibleItems.length === 0 ? (
               <div className="empty-state">
                 <CheckCircle2 size={22} />
                 <strong>Lista al día</strong>
@@ -299,10 +498,11 @@ export function ShoppingModule({ sidebarCollapsed, onSidebarToggle }: ShellContr
             ) : (
               visibleItems.map((item) => (
                 <ShoppingItemCard
+                  directory={directory}
                   item={item}
                   key={item.id}
-                  onDelete={() => deleteItem(item.id)}
-                  onToggle={() => toggleBought(item.id)}
+                  onDelete={() => deleteItem(item)}
+                  onToggle={() => toggleBought(item)}
                 />
               ))
             )}
@@ -314,10 +514,12 @@ export function ShoppingModule({ sidebarCollapsed, onSidebarToggle }: ShellContr
 }
 
 function ShoppingItemCard({
+  directory,
   item,
   onDelete,
   onToggle,
 }: {
+  directory: User[];
   item: ShoppingItem;
   onDelete: () => void;
   onToggle: () => void;
@@ -335,8 +537,8 @@ function ShoppingItemCard({
         <h3>{item.name}</h3>
         <p>{item.quantity}</p>
         <small>
-          {item.scope === "group" ? `Lo cargó ${userName(item.createdByUserId)}` : "Item personal"}
-          {item.boughtByUserId ? ` · comprado por ${userName(item.boughtByUserId)}` : ""}
+          {item.scope === "group" ? `Lo cargó ${userName(directory, item.createdByUserId)}` : "Item personal"}
+          {item.boughtByUserId ? ` · comprado por ${userName(directory, item.boughtByUserId)}` : ""}
         </small>
         {item.notes ? <small>{item.notes}</small> : null}
       </div>
