@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState, type CSSProperties, type For
 import {
   CalendarDays,
   CheckCircle2,
-  CircleDollarSign,
+  Wallet,
   Clock3,
   Edit3,
   Home,
@@ -560,9 +560,9 @@ export function CalendarModule({ sidebarCollapsed, onSidebarToggle }: ShellContr
         </button>
 
         <nav className="nav-list" aria-label="Secciones">
-          <a className="nav-item" href="#gastos">
-            <CircleDollarSign size={18} />
-            Gastos
+          <a className="nav-item" href="#movimientos">
+            <Wallet size={18} />
+            Movimientos
           </a>
           <a className="nav-item active" href="#calendario">
             <CalendarDays size={18} />

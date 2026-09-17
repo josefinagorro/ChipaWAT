@@ -2962,3 +2962,195 @@ select:focus {
   }
 }
 
+
+/* ============================================================
+   Movimientos: dinero actual, ingresos y transferencias saldadas
+   ============================================================
+   Ojo con el criterio de color de todo este bloque: el verde es plata que
+   entra y el rojo/rosa plata que sale, siempre. Si mas adelante se agrega
+   otro numero a esta pantalla, que siga la misma regla: el color tiene que
+   decir lo mismo en todos lados o deja de servir para leer de un vistazo. */
+
+.money-hero {
+  display: grid;
+  grid-template-columns: minmax(260px, 1fr) minmax(280px, 1.1fr);
+  gap: 24px;
+  padding: 24px;
+  border: 1px solid #ded8cc;
+  border-radius: 8px;
+  background:
+    linear-gradient(135deg, rgba(255, 252, 246, 0.96), rgba(226, 240, 234, 0.92)),
+    #fffaf2;
+  box-shadow: 0 18px 46px rgba(75, 65, 50, 0.08);
+}
+
+.money-hero.negative {
+  background:
+    linear-gradient(135deg, rgba(255, 252, 246, 0.96), rgba(250, 229, 227, 0.92)),
+    #fffaf2;
+}
+
+.money-hero-main {
+  display: grid;
+  gap: 8px;
+  align-content: start;
+}
+
+.money-hero-main strong {
+  font-size: clamp(36px, 5vw, 56px);
+  line-height: 1;
+  letter-spacing: -0.02em;
+  color: #2f6f5e;
+}
+
+.money-hero.negative .money-hero-main strong {
+  color: #b5473f;
+}
+
+.money-hero-main p {
+  max-width: 340px;
+  margin: 0;
+  color: #657066;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.money-hero-main .secondary-button {
+  justify-self: start;
+  margin-top: 6px;
+}
+
+.money-hero-breakdown {
+  display: grid;
+  gap: 6px;
+  align-content: center;
+  padding: 14px 16px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.66);
+}
+
+.money-line {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 5px 0;
+  border-bottom: 1px dashed rgba(180, 168, 150, 0.35);
+}
+
+.money-line:last-child {
+  border-bottom: 0;
+}
+
+.money-line span {
+  color: #667085;
+  font-size: 13px;
+  font-weight: 750;
+}
+
+.money-line strong {
+  font-size: 15px;
+  font-variant-numeric: tabular-nums;
+}
+
+.money-line.positive strong {
+  color: #2f6f5e;
+}
+
+.money-line.negative strong {
+  color: #b5473f;
+}
+
+/* El par de botones Gasto / Ingreso del modal */
+.kind-picker button.active.income {
+  color: #ffffff;
+  background: #2f6f5e;
+}
+
+.kind-picker button.active.expense {
+  color: #ffffff;
+  background: #b5473f;
+}
+
+/* Tarjetas de movimiento personal: una barrita al costado alcanza para saber
+   si suma o resta sin tener que leer el signo. */
+.movement-card {
+  border-left: 4px solid #ded8cc;
+}
+
+.movement-card.income {
+  border-left-color: #2f6f5e;
+}
+
+.movement-card.expense {
+  border-left-color: #d3527f;
+}
+
+.amount-income {
+  color: #2f6f5e;
+}
+
+.amount-expense {
+  color: #b5473f;
+}
+
+.history-row b.amount-income {
+  color: #2f6f5e;
+}
+
+/* Transferencias que ya ocurrieron */
+.recorded-settlement-list {
+  display: grid;
+  gap: 8px;
+}
+
+.recorded-settlement {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  border: 1px solid #ded8cc;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.recorded-settlement span {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.recorded-settlement strong {
+  overflow: hidden;
+  font-size: 15px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.recorded-settlement small {
+  color: #667085;
+  font-size: 12px;
+}
+
+.recorded-settlement b {
+  color: #2f6f5e;
+  font-variant-numeric: tabular-nums;
+}
+
+@media (max-width: 900px) {
+  .money-hero {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 560px) {
+  .recorded-settlement {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    row-gap: 6px;
+  }
+
+  .recorded-settlement b {
+    grid-column: 2 / 4;
+  }
+}

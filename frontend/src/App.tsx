@@ -18,7 +18,9 @@ function sectionFromHash(): string {
   if (window.location.hash === "#cuenta") return "account";
   if (window.location.hash === "#grupos") return "groups";
   if (window.location.hash.startsWith("#invitacion=")) return "invite";
-  return "expenses";
+  // "#gastos" sigue funcionando: es el nombre viejo del modulo, y puede estar
+  // guardado en un favorito o en un link que alguien se paso por WhatsApp.
+  return "movements";
 }
 
 /** Saca el código de un link de invitación: #invitacion=abc123 */
@@ -125,7 +127,7 @@ export function App() {
     return (
       <GroupsPage
         onExit={() => {
-          window.location.hash = "#gastos";
+          window.location.hash = "#movimientos";
         }}
       />
     );
@@ -135,7 +137,7 @@ export function App() {
     return (
       <AccountPage
         onExit={() => {
-          window.location.hash = "#gastos";
+          window.location.hash = "#movimientos";
         }}
       />
     );
@@ -145,7 +147,7 @@ export function App() {
     return (
       <AdminPanel
         onExit={() => {
-          window.location.hash = "#gastos";
+          window.location.hash = "#movimientos";
         }}
       />
     );

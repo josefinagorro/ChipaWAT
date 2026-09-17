@@ -6,11 +6,12 @@ export type ExpenseScope = "personal" | "group";
 
 export type ExpenseType = "rent" | "grocery" | "other";
 
+/** Un movimiento personal puede ser plata que sale o plata que entra. */
+export type MovementKind = "expense" | "income";
+
 export type PaymentStatus = "pending" | "paid";
 
 export type RentStatus = "pending" | "partial" | "paid";
-
-export type SettlementStatus = "pending" | "paid";
 
 export type GroupRole = "owner" | "admin" | "member";
 
@@ -55,10 +56,11 @@ export type RentMonth = {
   payments: Record<UserId, PaymentStatus>;
 };
 
-export type PersonalExpense = {
+export type PersonalMovement = {
   id: string;
   scope: "personal";
   ownerUserId: UserId;
+  kind: MovementKind;
   type: "other";
   category: string;
   description: string;
@@ -79,10 +81,11 @@ export type GroupExpense = {
   participantIds: UserId[];
 };
 
-export type Expense = PersonalExpense | GroupExpense;
+export type Expense = PersonalMovement | GroupExpense;
 
 export type ExpenseDraft = {
   scope: ExpenseScope;
+  kind: MovementKind;
   type: ExpenseType;
   category: string;
   description: string;
@@ -105,7 +108,30 @@ export type MemberBalance = {
   amountCents: number;
 };
 
+/** Una deuda pendiente lista para mostrar. El id sirve solo como key de React. */
 export type Settlement = Transfer & {
   id: string;
-  status: SettlementStatus;
+};
+
+/** Una transferencia que YA ocurrió y quedó guardada en la base. */
+export type GroupSettlement = {
+  id: string;
+  groupId: GroupId;
+  fromUser: UserId;
+  toUser: UserId;
+  amountCents: number;
+  settledOn: string;
+};
+
+/**
+ * El desglose de "cuánta plata tenés", tal cual lo devuelve la función
+ * my_money_balance() de Supabase. Cruza lo personal con lo grupal.
+ */
+export type MoneyBalance = {
+  incomeCents: number;
+  personalExpenseCents: number;
+  groupPaidCents: number;
+  receivedCents: number;
+  sentCents: number;
+  balanceCents: number;
 };

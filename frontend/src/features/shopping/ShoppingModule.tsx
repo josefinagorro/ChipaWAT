@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState, type CSSProperties, type For
 import {
   CalendarDays,
   CheckCircle2,
-  CircleDollarSign,
+  Wallet,
   PanelLeftClose,
   PanelLeftOpen,
   Plus,
@@ -315,9 +315,9 @@ export function ShoppingModule({ sidebarCollapsed, onSidebarToggle }: ShellContr
         </button>
 
         <nav className="nav-list" aria-label="Secciones">
-          <a className="nav-item" href="#gastos">
-            <CircleDollarSign size={18} />
-            Gastos
+          <a className="nav-item" href="#movimientos">
+            <Wallet size={18} />
+            Movimientos
           </a>
           <a className="nav-item" href="#calendario">
             <CalendarDays size={18} />

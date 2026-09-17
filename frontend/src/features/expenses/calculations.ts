@@ -1,6 +1,7 @@
 import { splitEvenly } from "./money";
 import type {
   GroupExpense,
+  GroupSettlement,
   MemberBalance,
   MemberId,
   RentMonth,
@@ -78,26 +79,50 @@ export function buildExpenseTransfers(expenses: GroupExpense[]): Transfer[] {
   });
 }
 
+/**
+ * Junta todas las deudas sueltas en una sola por par de personas, y compensa
+ * las que van en sentidos opuestos: si Ana le debe $300 a Bea y Bea le debe
+ * $100 a Ana, queda una sola línea de $200 de Ana a Bea.
+ *
+ * Esto es lo que hace que una transferencia ya registrada borre la deuda: entra
+ * como un movimiento al revés y se cancela contra lo que se debía.
+ */
 export function mergeTransfers(transfers: Transfer[]): Transfer[] {
-  const merged = new Map<string, Transfer>();
+  // La clave es el par ordenado (siempre el mismo par da la misma clave, vaya
+  // la deuda para donde vaya) y el valor es el neto en la direccion a -> b.
+  const netByPair = new Map<string, number>();
 
   transfers.forEach((transfer) => {
-    if (transfer.amountCents <= 0) {
+    if (transfer.amountCents <= 0 || transfer.from === transfer.to) {
       return;
     }
 
-    const key = `${transfer.from}:${transfer.to}`;
-    const current = merged.get(key);
+    const forward = transfer.from < transfer.to;
+    const key = forward
+      ? `${transfer.from}|${transfer.to}`
+      : `${transfer.to}|${transfer.from}`;
+    const signedAmount = forward ? transfer.amountCents : -transfer.amountCents;
 
-    merged.set(key, {
-      ...transfer,
-      amountCents: (current?.amountCents ?? 0) + transfer.amountCents,
-    });
+    netByPair.set(key, (netByPair.get(key) ?? 0) + signedAmount);
   });
 
-  return Array.from(merged.values()).sort(
-    (first, second) => second.amountCents - first.amountCents,
-  );
+  return Array.from(netByPair.entries())
+    .flatMap(([key, netAmount]) => {
+      if (netAmount === 0) {
+        return [];
+      }
+
+      const [first, second] = key.split("|");
+
+      return [
+        {
+          from: netAmount > 0 ? first : second,
+          to: netAmount > 0 ? second : first,
+          amountCents: Math.abs(netAmount),
+        },
+      ];
+    })
+    .sort((first, second) => second.amountCents - first.amountCents);
 }
 
 export function calculateBalances(members: User[], transfers: Transfer[]): MemberBalance[] {
@@ -157,11 +182,25 @@ export function simplifyTransfers(balances: MemberBalance[]): Transfer[] {
   return transfers;
 }
 
+/**
+ * Una transferencia ya registrada entra al cálculo como una deuda al revés: si
+ * Ana le transfirió $500 a Bea, es como si Bea le debiera $500 a Ana, y eso se
+ * cancela contra lo que Ana debía. Cuando las dos cosas se emparejan, la deuda
+ * desaparece de la lista de pendientes.
+ */
+export function buildSettlementTransfers(settlements: GroupSettlement[]): Transfer[] {
+  return settlements.map((settlement) => ({
+    from: settlement.toUser,
+    to: settlement.fromUser,
+    amountCents: settlement.amountCents,
+  }));
+}
+
 export function calculateSettlements(
   members: User[],
   rents: RentMonth[],
   expenses: GroupExpense[],
-  paidSettlementIds: string[],
+  settlements: GroupSettlement[],
 ): {
   directTransfers: Transfer[];
   balances: MemberBalance[];
@@ -170,17 +209,13 @@ export function calculateSettlements(
   const directTransfers = mergeTransfers([
     ...buildRentTransfers(rents),
     ...buildExpenseTransfers(expenses),
+    ...buildSettlementTransfers(settlements),
   ]);
   const balances = calculateBalances(members, directTransfers);
-  const simplifiedSettlements: Settlement[] = simplifyTransfers(balances).map((transfer) => {
-    const id = `${transfer.from}-${transfer.to}-${transfer.amountCents}`;
-
-    return {
-      ...transfer,
-      id,
-      status: paidSettlementIds.includes(id) ? "paid" : "pending",
-    };
-  });
+  const simplifiedSettlements: Settlement[] = simplifyTransfers(balances).map((transfer) => ({
+    ...transfer,
+    id: `${transfer.from}-${transfer.to}-${transfer.amountCents}`,
+  }));
 
   return { directTransfers, balances, simplifiedSettlements };
 }

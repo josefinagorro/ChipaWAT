@@ -1,5 +1,5 @@
 import { supabase } from "../../lib/supabaseClient";
-import type { GroupExpense, PaymentStatus, RentMonth, UserId } from "./types";
+import type { GroupExpense, GroupSettlement, PaymentStatus, RentMonth, UserId } from "./types";
 
 type GroupExpenseRow = {
   id: string;
@@ -189,5 +189,67 @@ export async function setRentPayment(
     .eq("rent_month_id", rentMonthId)
     .eq("user_id", userId);
 
+  if (error) fail(error.message);
+}
+
+// ============================================================
+// Transferencias ya saldadas
+// ============================================================
+// Antes "marcar como pagado" vivía en la memoria del navegador y se perdía al
+// recargar. Ahora se guarda el PAGO que ocurrió de verdad: la deuda pendiente
+// pasa a ser lo que debés menos lo que ya transferiste.
+
+type GroupSettlementRow = {
+  id: string;
+  group_id: string;
+  from_user: string;
+  to_user: string;
+  amount_cents: number;
+  settled_on: string;
+};
+
+export type GroupSettlementInput = {
+  fromUser: UserId;
+  toUser: UserId;
+  amountCents: number;
+  settledOn?: string;
+};
+
+export async function listGroupSettlements(groupId: string): Promise<GroupSettlement[]> {
+  const { data, error } = await supabase
+    .from("group_settlements")
+    .select("id, group_id, from_user, to_user, amount_cents, settled_on")
+    .eq("group_id", groupId)
+    .order("settled_on", { ascending: false });
+
+  if (error) fail(error.message);
+
+  return ((data ?? []) as GroupSettlementRow[]).map((row) => ({
+    id: row.id,
+    groupId: row.group_id,
+    fromUser: row.from_user,
+    toUser: row.to_user,
+    amountCents: row.amount_cents,
+    settledOn: row.settled_on,
+  }));
+}
+
+export async function recordGroupSettlement(
+  groupId: string,
+  input: GroupSettlementInput,
+): Promise<void> {
+  const { error } = await supabase.rpc("record_group_settlement", {
+    p_group_id: groupId,
+    p_from_user: input.fromUser,
+    p_to_user: input.toUser,
+    p_amount_cents: input.amountCents,
+    p_settled_on: input.settledOn ?? new Date().toISOString().slice(0, 10),
+  });
+
+  if (error) fail(error.message);
+}
+
+export async function deleteGroupSettlement(settlementId: string): Promise<void> {
+  const { error } = await supabase.from("group_settlements").delete().eq("id", settlementId);
   if (error) fail(error.message);
 }
