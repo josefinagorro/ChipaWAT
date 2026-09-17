@@ -2161,6 +2161,7 @@ select:focus {
 }
 
 .nav-group summary {
+  cursor: pointer;
   list-style: none;
 }
 
@@ -2168,16 +2169,34 @@ select:focus {
   display: none;
 }
 
+/* El chevron de abrir/cerrar se dibuja con dos bordes en vez de escribir una
+   letra ("v") como content: una letra depende de la tipografia, no queda
+   centrada y se ve como un caracter suelto al lado del texto. Dos bordes
+   girados 45 grados dan una punta pareja a cualquier tamano.
+   Hereda el color del item con currentColor, asi acompana al texto en vez de
+   competirle, y solo se pinta fuerte cuando pasas el mouse. */
 .nav-group summary::after {
+  display: block;
+  width: 6px;
+  height: 6px;
+  margin-right: 3px;
   margin-left: auto;
-  color: #bd4778;
-  content: "v";
-  font-size: 16px;
-  line-height: 1;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  content: "";
+  opacity: 0.45;
+  transform: translateY(-2px) rotate(45deg);
+  transition:
+    transform 160ms ease,
+    opacity 160ms ease;
+}
+
+.nav-group summary:hover::after {
+  opacity: 0.9;
 }
 
 .nav-group[open] summary::after {
-  transform: rotate(180deg);
+  transform: translateY(1px) rotate(225deg);
 }
 
 .nav-subitems {
